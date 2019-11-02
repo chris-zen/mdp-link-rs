@@ -192,10 +192,16 @@ impl Radio<Disabled> {
   }
 
   pub fn set_prefixes(self, prefixes: [u8; 8]) -> Self {
-    let prefix0 = prefixes[0] << 24 | prefixes[1] << 16 | prefixes[2] << 8 | prefixes[3];
-    let prefix1 = prefixes[4] << 24 | prefixes[5] << 16 | prefixes[6] << 8 | prefixes[7];
-    self.radio.prefix0.write(|w| unsafe { w.bits(prefixes0.reverse_bits()) });
-    self.radio.prefix1.write(|w| unsafe { w.bits(prefixes1.reverse_bits()) });
+    let prefix0 = u32::from(prefixes[0]) << 24 |
+                        u32::from(prefixes[1]) << 16 |
+                        u32::from(prefixes[2]) << 8 |
+                        u32::from(prefixes[3]);
+    let prefix1 = u32::from(prefixes[4]) << 24 |
+                        u32::from(prefixes[5]) << 16 |
+                        u32::from(prefixes[6]) << 8 |
+                        u32::from(prefixes[7]);
+    self.radio.prefix0.write(|w| unsafe { w.bits(prefix0.reverse_bits()) });
+    self.radio.prefix1.write(|w| unsafe { w.bits(prefix1.reverse_bits()) });
     self
   }
 
