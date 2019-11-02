@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "nrf52-radio",
+  "nrf52-radio-esb",
+  "mdp-link-rs"
+]
