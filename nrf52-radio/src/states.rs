@@ -8,10 +8,10 @@ See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1
 
 pub struct Disabled;
 
-pub struct RxDisable;
-pub struct RxRumpUp;
-pub struct RxIdle;
-pub struct Rx;
+pub struct RxRumpUp<'a>(pub &'a mut [u8]);
+pub struct RxIdle<'a>(pub &'a mut [u8]);
+pub struct Rx<'a>(pub &'a mut [u8]);
+pub struct RxDisable<'a>(pub &'a mut [u8]);
 
 pub struct TxDisable;
 pub struct TxRumpUp;

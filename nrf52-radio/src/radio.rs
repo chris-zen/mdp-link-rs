@@ -6,11 +6,19 @@ See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1
 
 */
 
+use nb;
+
 use crate::hal::target::RADIO;
 use crate::states::*;
 use crate::tx_power::TxPower;
 use crate::mode::Mode;
 use crate::packet_config::{PacketPreamble, PacketEndianess};
+use crate::frequency::Frequency;
+use crate::base_address::BaseAddresses;
+
+
+type NbResult<T> = nb::Result<T, nb::Error<()>>;
+
 
 pub trait RadioExt {
   fn constrain(self) -> Radio<Disabled>;
@@ -19,19 +27,24 @@ pub trait RadioExt {
 impl RadioExt for RADIO {
   fn constrain(self) -> Radio<Disabled> {
     Radio {
-      _state: Disabled,
+      state: Disabled,
       radio: self
     }
   }
 }
 
 pub struct Radio<S> {
-  _state: S,
+  state: S,
   radio: RADIO,
 }
 
 impl<S> Radio<S> {
-
+  /// 6.20.14.9 PACKETPTR
+  /// Not sure to expose this, we need to play well with ownership and borrowing
+  fn set_packet_ptr(&self, buffer: &mut [u8]) {
+    let ptr = buffer.as_ptr() as u32;
+    self.radio.packetptr.write(|w| unsafe { w.bits(ptr) });
+  }
 }
 
 impl Radio<Disabled> {
@@ -183,8 +196,12 @@ impl Radio<Disabled> {
     self
   }
 
-  pub fn set_base_address(self, length: u8, base0: u32, base1: u32) -> Self {
-    assert!(length >= 2 && length <= 4);
+  pub fn set_base_addresses(self, addr: BaseAddresses) -> Self {
+    let (length, base0, base1) = match addr {
+      BaseAddresses::TwoBytes(addr0, addr1) => (2, u32::from(addr0), u32::from(addr1)),
+      BaseAddresses::ThreeBytes(addr0, addr1) => (2, addr0 & 0xffffff, addr1 & 0xffffff),
+      BaseAddresses::FourBytes(addr0, addr1) => (2, addr0, addr1),
+    };
     self.radio.pcnf1.write(|w| unsafe { w.balen().bits(length) });
     self.radio.base0.write(|w| unsafe { w.bits(base0.reverse_bits()) } );
     self.radio.base1.write(|w| unsafe { w.bits(base1.reverse_bits()) } );
@@ -205,15 +222,148 @@ impl Radio<Disabled> {
     self
   }
 
-  pub fn set_channel(self, channel: u8) -> Self {
-    self.radio.frequency.write(|w| unsafe { w.frequency().bits(channel) });
+  /// 6.20.14.10 FREQUENCY
+  pub fn set_frequency(self, freq: Frequency) -> Self {
+    self.radio.frequency.write(|w| unsafe {
+      let channel = match freq {
+        Frequency::Default2400MHz(channel) => {
+          w.map().default();
+          channel
+        },
+        Frequency::Low2360MHz(channel) => {
+          w.map().low();
+          channel
+        },
+      };
+      assert!(channel <= 100);
+      w.frequency().bits(channel)
+    });
     self
   }
 
-  pub fn enable_rx(self) -> Radio<RxRumpUp> {
+  /// Receive address select. 6.20.14.20 RXADDRESSES
+  pub fn set_rx_addresses(self, mask: u8) -> Self {
+    self.radio.rxaddresses.write(|w| unsafe { w.bits(mask.into()) });
+    self
+  }
+
+  /// Transition from Disabled to Rx ramp up
+  /// It will own the buffer until disabled again
+  pub fn enable_rx(self, buffer: &mut [u8]) -> Radio<RxRumpUp> {
+    self.set_packet_ptr(buffer);
+    self.radio.events_ready.write(|w| w.events_ready().clear_bit());
+    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    self.radio.events_end.write(|w| w.events_end().clear_bit());
+    self.radio.events_address.write(|w| w.events_address().clear_bit());
+    self.radio.events_payload.write(|w| w.events_payload().clear_bit());
+    self.radio.tasks_rxen.write(|w| w.tasks_rxen().set_bit());
     Radio {
-      _state: RxRumpUp,
+      state: RxRumpUp(buffer),
       radio: self.radio
+    }
+  }
+}
+
+impl<'a> Radio<RxRumpUp<'a>> {
+  pub fn is_ready(&self) -> bool {
+    self.radio.events_ready.read().events_ready().bit_is_set()
+  }
+
+  pub fn into_idle(self) -> NbResult<Radio<RxIdle<'a>>> {
+    if self.is_ready() {
+      Ok(Radio {
+        state: RxIdle(self.state.0),
+        radio: self.radio,
+      })
+    }
+    else {
+      Err(nb::Error::WouldBlock)
+    }
+  }
+
+  pub fn disable(self) -> Radio<RxDisable<'a>> {
+    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    Radio {
+      state: RxDisable(self.state.0),
+      radio: self.radio,
+    }
+  }
+}
+
+impl<'a> Radio<RxIdle<'a>> {
+
+  pub fn start_rx(self) -> Radio<Rx<'a>> {
+    self.radio.events_end.write(|w| w.events_end().clear_bit());
+    self.radio.events_address.write(|w| w.events_address().clear_bit());
+    self.radio.events_payload.write(|w| w.events_payload().clear_bit());
+    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
+    Radio {
+      state: Rx(self.state.0),
+      radio: self.radio,
+    }
+  }
+
+  pub fn disable(self) -> Radio<RxDisable<'a>> {
+    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    Radio {
+      state: RxDisable(self.state.0),
+      radio: self.radio,
+    }
+  }
+}
+
+impl<'a> Radio<Rx<'a>> {
+
+  pub fn is_address_received(&self) -> bool {
+    self.radio.events_address.read().events_address().bit_is_set()
+  }
+
+  pub fn is_payload_received(&self) -> bool {
+    self.radio.events_payload.read().events_payload().bit_is_set()
+  }
+
+  pub fn is_packet_received(&self) -> bool {
+    self.radio.events_end.read().events_end().bit_is_set()
+  }
+
+  // read_packet ?
+//  pub fn wait_packet(self) -> NbResult<Radio<RxIdle<'a>>> {
+//  }
+
+  pub fn stop(self) -> Radio<RxIdle<'a>> {
+    self.radio.tasks_stop.write(|w| w.tasks_stop().set_bit());
+    Radio {
+      state: RxIdle(self.state.0),
+      radio: self.radio,
+    }
+  }
+
+  pub fn disable(self) -> Radio<RxDisable<'a>> {
+    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    Radio {
+      state: RxDisable(self.state.0),
+      radio: self.radio,
+    }
+  }
+}
+
+impl<'a> Radio<RxDisable<'a>> {
+  pub fn is_disabled(&self) -> bool {
+    self.radio.events_disabled.read().events_disabled().bit_is_set()
+  }
+
+  pub fn into_disabled(self) -> NbResult<(Radio<Disabled>, &'a [u8])> {
+    if self.is_disabled() {
+      let radio = Radio {
+        state: Disabled,
+        radio: self.radio,
+      };
+      let buffer = self.state.0;
+      Ok((radio, buffer))
+    }
+    else {
+      Err(nb::Error::WouldBlock)
     }
   }
 }
