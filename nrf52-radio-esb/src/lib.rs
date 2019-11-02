@@ -73,10 +73,10 @@ impl Esb<Disabled> {
     self.with_radio(|radio| radio.set_crc_16bits(0xffff, 0x11021))
   }
 
-  pub fn enable_rx(self) -> Esb<RxRumpUp> {
+  pub fn enable_rx(self, buffer: &mut [u8]) -> Esb<RxRumpUp> {
     Esb {
       protocol: self.protocol,
-      radio: self.radio.enable_rx(),
+      radio: self.radio.enable_rx(buffer),
     }
   }
 }
