@@ -19,17 +19,18 @@ impl<S> Esb<S> {
       radio
     }
   }
-}
 
-impl Esb<Disabled> {
-  fn with_radio<F>(self, f: F) -> Self
-    where F: Fn(Radio<Disabled>) -> Radio<Disabled>
+  pub fn with_radio<F>(self, transform: F) -> Self
+    where F: Fn(Radio<S>) -> Radio<S>
   {
     Esb {
-      radio: f(self.radio),
+      radio: transform(self.radio),
       .. self
     }
   }
+}
+
+impl Esb<Disabled> {
 
   pub fn set_protocol(mut self, protocol: Protocol) -> Self {
     self.protocol = protocol;
@@ -70,5 +71,12 @@ impl Esb<Disabled> {
 
   pub fn set_crc_16bits(self) -> Self {
     self.with_radio(|radio| radio.set_crc_16bits(0xffff, 0x11021))
+  }
+
+  pub fn enable_rx(self) -> Esb<RxRumpUp> {
+    Esb {
+      protocol: self.protocol,
+      radio: self.radio.enable_rx(),
+    }
   }
 }

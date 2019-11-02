@@ -25,6 +25,9 @@ use nrf52840_mdk::Leds;
 use nrf52_radio::radio::RadioExt;
 use nrf52_radio::tx_power::TxPower;
 use nrf52_radio::mode::Mode;
+use nrf52_radio_esb::Esb;
+use nrf52_radio_esb::protocol::Protocol as EsbProtocol;
+use nrf52_radio::states::Disabled;
 
 #[entry]
 fn main() -> ! {
@@ -37,8 +40,15 @@ fn main() -> ! {
 
     let radio = board.RADIO.constrain()
         .set_tx_power(TxPower::ZerodBm)
-        .set_mode(Mode::Nrf2Mbit);
-    let radio = radio.enable_rx();
+        .set_mode(Mode::Nrf2Mbit)
+        .set_base_address(4, 0xa0b1c2d3, 0xa0b1c2d3)
+        .set_prefixes([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
+        .set_channel(78);
+
+    let esb = Esb::<Disabled>::new(radio)
+        .set_protocol(EsbProtocol::FixedPayloadLength(32))
+        .set_crc_16bits()
+        .enable_rx();
 
     loop {
         match board.uart_daplink.write_char('.') {
