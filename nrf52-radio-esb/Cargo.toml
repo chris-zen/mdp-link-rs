@@ -1,0 +1,16 @@
+[package]
+name = "nrf52-radio-esb"
+version = "0.1.0"
+authors = ["Christian Perez Llamas"]
+edition = "2018"
+
+[dependencies]
+cortex-m = "0.6.1"
+embedded-hal = "0.2.3"
+nrf52840-hal = "0.8.1"
+
+nrf52-radio = { path = "../nrf52-radio" }
+
+#[features]
+#rt = ["nrf52840-hal/rt"]
+#default = ["rt"]
