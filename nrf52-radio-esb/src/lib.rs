@@ -4,8 +4,11 @@ pub mod protocol;
 
 use nrf52_radio::Radio;
 use nrf52_radio::states::*;
-use crate::protocol::Protocol;
 use nrf52_radio::packet_config::PacketEndianess;
+use nrf52_radio::NbResult;
+
+use crate::protocol::Protocol;
+
 
 pub struct Esb<S> {
   protocol: Protocol,
@@ -73,10 +76,20 @@ impl Esb<Disabled> {
     self.with_radio(|radio| radio.set_crc_16bits(0xffff, 0x11021))
   }
 
-  pub fn enable_rx(self, buffer: &mut [u8]) -> Esb<RxRumpUp> {
-    Esb {
-      protocol: self.protocol,
-      radio: self.radio.enable_rx(buffer),
-    }
+  pub fn start_rx(self, buffer: &mut [u8]) -> NbResult<Esb<Rx>> {
+    let protocol = self.protocol;
+    self.radio.enable_rx(buffer)
+        .into_idle()
+        .map(|radio_idle| radio_idle.start_rx())
+        .map(|radio_rx| Esb {
+          protocol,
+          radio: radio_rx,
+        })
+  }
+}
+
+impl<'a> Esb<Rx<'a>> {
+  pub fn read_packet(&self) -> NbResult<&[u8]> {
+    self.radio.read_packet()
   }
 }

@@ -10,13 +10,13 @@ pub enum Protocol {
 
 impl Protocol {
   /// Dynamic Payload up to a maximum number of bytes
-  pub fn dynamic_payload(max_length: u8) -> Self {
+  pub fn dynamic_payload_length(max_length: u8) -> Self {
     assert!(max_length <= 252);
     Protocol::DynamicPayloadLength(max_length)
   }
 
   /// Fixed Payload of a given number of bytes
-  pub fn fixed_payload(length: u8) -> Self {
+  pub fn fixed_payload_length(length: u8) -> Self {
     assert!(length <= 32);
     Protocol::FixedPayloadLength(length)
   }

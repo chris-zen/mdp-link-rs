@@ -44,6 +44,8 @@ fn main() -> ! {
 
     let mut buffer: [u8; 64] = [0u8; 64];
 
+    drop(board.uart_daplink.write_str("Initialising ...\n"));
+
     let radio = board.RADIO.constrain()
         .set_tx_power(TxPower::ZerodBm)
         .set_mode(Mode::Nrf2Mbit)
@@ -52,22 +54,28 @@ fn main() -> ! {
         .set_prefixes([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
         .set_rx_addresses(RX_ADDRESS_ALL);
 
-    let esb = Esb::<Disabled>::new(radio)
-        .set_protocol(EsbProtocol::fixed_payload(32))
+    let esb_result = Esb::<Disabled>::new(radio)
+        .set_protocol(EsbProtocol::fixed_payload_length(32))
         .set_crc_16bits()
-        .enable_rx(&mut buffer);
+        .start_rx(&mut buffer);
+
+    let esb = block!(esb_result).unwrap();
+
+    drop(board.uart_daplink.write_str("Listening ...\n"));
 
     loop {
-        match board.uart_daplink.write_char('.') {
-            Ok(()) => {
-
+        match esb.read_packet() {
+            Ok(buffer) => {
+                for b in buffer.iter() {
+                    drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
+                }
+                drop(board.uart_daplink.write_char('\n'));
             },
-            Err(_) => {
-
+            _ => {
             }
-        }
+        };
 
-        delay(&mut timer, 1_000_000);
+//        delay(&mut timer, 1_000_000);
     }
 }
 

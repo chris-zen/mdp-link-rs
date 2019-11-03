@@ -1,6 +1,7 @@
 #![no_std]
 
 use nrf52840_hal as hal;
+use nb;
 
 pub mod tx_power;
 pub mod mode;
@@ -12,3 +13,5 @@ pub mod states;
 pub mod radio;
 
 pub use radio::{Radio, RadioExt};
+
+pub type NbResult<T> = nb::Result<T, nb::Error<()>>;

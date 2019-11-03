@@ -15,10 +15,7 @@ use crate::mode::Mode;
 use crate::packet_config::{PacketPreamble, PacketEndianess};
 use crate::frequency::Frequency;
 use crate::base_address::BaseAddresses;
-
-
-type NbResult<T> = nb::Result<T, nb::Error<()>>;
-
+use crate::NbResult;
 
 pub trait RadioExt {
   fn constrain(self) -> Radio<Disabled>;
@@ -26,6 +23,7 @@ pub trait RadioExt {
 
 impl RadioExt for RADIO {
   fn constrain(self) -> Radio<Disabled> {
+    self.power.write(|w| w.power().enabled());
     Radio {
       state: Disabled,
       radio: self
@@ -327,9 +325,26 @@ impl<'a> Radio<Rx<'a>> {
     self.radio.events_end.read().events_end().bit_is_set()
   }
 
-  // read_packet ?
-//  pub fn wait_packet(self) -> NbResult<Radio<RxIdle<'a>>> {
-//  }
+  pub fn read_packet(&self) -> NbResult<&[u8]> {
+    if self.is_packet_received() {
+      Ok(self.state.0)
+    }
+    else {
+      Err(nb::Error::WouldBlock)
+    }
+  }
+
+  pub fn into_idle(self) -> NbResult<Radio<RxIdle<'a>>> {
+    if self.is_packet_received() {
+      Ok(Radio {
+        state: RxIdle(self.state.0),
+        radio: self.radio,
+      })
+    }
+    else {
+      Err(nb::Error::WouldBlock)
+    }
+  }
 
   pub fn stop(self) -> Radio<RxIdle<'a>> {
     self.radio.tasks_stop.write(|w| w.tasks_stop().set_bit());
