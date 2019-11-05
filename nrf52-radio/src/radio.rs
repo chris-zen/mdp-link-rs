@@ -6,6 +6,8 @@ See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1
 
 */
 
+use cortex_m_semihosting::{dbg, hprintln, heprintln};
+
 use nb;
 
 use crate::hal::target::RADIO;
@@ -17,12 +19,14 @@ use crate::frequency::Frequency;
 use crate::base_address::BaseAddresses;
 use crate::NbResult;
 
+
 pub trait RadioExt {
   fn constrain(self) -> Radio<Disabled>;
 }
 
 impl RadioExt for RADIO {
   fn constrain(self) -> Radio<Disabled> {
+    self.intenclr.write(|w| unsafe { w.bits(0xffffffff) });
     self.power.write(|w| w.power().enabled());
     Radio {
       state: Disabled,
@@ -33,7 +37,7 @@ impl RadioExt for RADIO {
 
 pub struct Radio<S> {
   state: S,
-  radio: RADIO,
+  pub radio: RADIO,
 }
 
 impl<S> Radio<S> {
@@ -249,12 +253,14 @@ impl Radio<Disabled> {
   /// It will own the buffer until disabled again
   pub fn enable_rx(self, buffer: &mut [u8]) -> Radio<RxRumpUp> {
     self.set_packet_ptr(buffer);
-    self.radio.events_ready.write(|w| w.events_ready().clear_bit());
-    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
-    self.radio.events_end.write(|w| w.events_end().clear_bit());
-    self.radio.events_address.write(|w| w.events_address().clear_bit());
-    self.radio.events_payload.write(|w| w.events_payload().clear_bit());
+    self.radio.events_ready.reset();
+    self.radio.events_disabled.reset();
+    self.radio.events_end.reset();
+    self.radio.events_address.reset();
+    self.radio.events_payload.reset();
     self.radio.tasks_rxen.write(|w| w.tasks_rxen().set_bit());
+    dbg!(self.radio.state.read().bits());
+
     Radio {
       state: RxRumpUp(buffer),
       radio: self.radio
@@ -269,6 +275,7 @@ impl<'a> Radio<RxRumpUp<'a>> {
 
   pub fn into_idle(self) -> NbResult<Radio<RxIdle<'a>>> {
     if self.is_ready() {
+      self.radio.events_ready.reset();
       Ok(Radio {
         state: RxIdle(self.state.0),
         radio: self.radio,
@@ -280,7 +287,7 @@ impl<'a> Radio<RxRumpUp<'a>> {
   }
 
   pub fn disable(self) -> Radio<RxDisable<'a>> {
-    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    self.radio.tasks_disable.write(|w| w.tasks_disable().set_bit());
     Radio {
       state: RxDisable(self.state.0),
       radio: self.radio,
@@ -291,10 +298,14 @@ impl<'a> Radio<RxRumpUp<'a>> {
 impl<'a> Radio<RxIdle<'a>> {
 
   pub fn start_rx(self) -> Radio<Rx<'a>> {
-    self.radio.events_end.write(|w| w.events_end().clear_bit());
-    self.radio.events_address.write(|w| w.events_address().clear_bit());
-    self.radio.events_payload.write(|w| w.events_payload().clear_bit());
-    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    heprintln!("{:x}", self.radio.base0.read().bits().reverse_bits()).unwrap();
+    heprintln!("{:x}", self.radio.base1.read().bits().reverse_bits()).unwrap();
+    heprintln!("{:x}", self.radio.prefix0.read().bits().reverse_bits()).unwrap();
+    heprintln!("{:x}", self.radio.prefix1.read().bits().reverse_bits()).unwrap();
+    self.radio.events_end.reset();
+    self.radio.events_address.reset();
+    self.radio.events_payload.reset();
+    self.radio.events_disabled.reset();
     self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
     Radio {
       state: Rx(self.state.0),
@@ -303,7 +314,7 @@ impl<'a> Radio<RxIdle<'a>> {
   }
 
   pub fn disable(self) -> Radio<RxDisable<'a>> {
-    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    self.radio.tasks_disable.write(|w| w.tasks_disable().set_bit());
     Radio {
       state: RxDisable(self.state.0),
       radio: self.radio,
@@ -323,10 +334,15 @@ impl<'a> Radio<Rx<'a>> {
 
   pub fn is_packet_received(&self) -> bool {
     self.radio.events_end.read().events_end().bit_is_set()
+      && self.radio.crcstatus.read().crcstatus().is_crcok()
   }
 
   pub fn read_packet(&self) -> NbResult<&[u8]> {
     if self.is_packet_received() {
+      dbg!(self.radio.crcstatus.read().bits());
+      dbg!(self.radio.rxmatch.read().bits());
+      dbg!(self.radio.rxcrc.read().bits());
+      dbg!(self.radio.dai.read().bits());
       Ok(self.state.0)
     }
     else {
@@ -336,6 +352,9 @@ impl<'a> Radio<Rx<'a>> {
 
   pub fn into_idle(self) -> NbResult<Radio<RxIdle<'a>>> {
     if self.is_packet_received() {
+      self.radio.events_address.reset();
+      self.radio.events_payload.reset();
+      self.radio.events_end.reset();
       Ok(Radio {
         state: RxIdle(self.state.0),
         radio: self.radio,
@@ -355,7 +374,7 @@ impl<'a> Radio<Rx<'a>> {
   }
 
   pub fn disable(self) -> Radio<RxDisable<'a>> {
-    self.radio.events_disabled.write(|w| w.events_disabled().clear_bit());
+    self.radio.tasks_disable.write(|w| w.tasks_disable().set_bit());
     Radio {
       state: RxDisable(self.state.0),
       radio: self.radio,
@@ -370,6 +389,7 @@ impl<'a> Radio<RxDisable<'a>> {
 
   pub fn into_disabled(self) -> NbResult<(Radio<Disabled>, &'a [u8])> {
     if self.is_disabled() {
+      self.radio.events_disabled.reset();
       let radio = Radio {
         state: Disabled,
         radio: self.radio,
