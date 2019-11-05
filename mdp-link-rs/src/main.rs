@@ -25,7 +25,7 @@ use nrf52840_mdk::Leds;
 use nrf52_radio::radio::RadioExt;
 use nrf52_radio::tx_power::TxPower;
 use nrf52_radio::mode::Mode;
-use nrf52_radio::states::Disabled;
+use nrf52_radio::states::{Disabled, Rx};
 use nrf52_radio::frequency::Frequency;
 use nrf52_radio::rx_addresses::RX_ADDRESS_ALL;
 use nrf52_radio::base_address::BaseAddresses;
@@ -42,7 +42,7 @@ fn main() -> ! {
 
     board.CLOCK.constrain().enable_ext_hfosc();
 
-    let mut buffer: [u8; 64] = [0u8; 64];
+    let mut buffer = [0x01u8; 48];
 
     drop(board.uart_daplink.write_str("Initialising ...\n"));
 
@@ -50,7 +50,8 @@ fn main() -> ! {
         .set_tx_power(TxPower::ZerodBm)
         .set_mode(Mode::Nrf2Mbit)
         .set_frequency(Frequency::from_2400mhz_channel(78))
-        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
+//        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
+        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xd3, 0xc2, 0xb1, 0xa0]))
         .set_prefixes([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
         .set_rx_addresses(RX_ADDRESS_ALL);
 
@@ -59,7 +60,9 @@ fn main() -> ! {
         .set_crc_16bits()
         .start_rx(&mut buffer);
 
-    let esb = block!(esb_result).unwrap();
+    let mut esb: Esb<Rx> = block!(esb_result).unwrap();
+
+    board.leds.red.on();
 
     drop(board.uart_daplink.write_str("Listening ...\n"));
 
@@ -70,6 +73,9 @@ fn main() -> ! {
                     drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
                 }
                 drop(board.uart_daplink.write_char('\n'));
+                board.leds.green.on();
+                board.leds.blue.on();
+                loop {}
             },
             _ => {
             }

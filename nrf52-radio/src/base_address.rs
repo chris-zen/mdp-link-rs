@@ -20,6 +20,6 @@ impl BaseAddresses {
   /// Four bytes addresses with the same value for base0 and base1
   pub fn from_same_four_bytes(a: [u8; 4]) -> Self {
     let addr = u32::from(a[0]) << 24 | u32::from(a[1]) << 16 | u32::from(a[2]) << 8 | u32::from(a[3]);
-    BaseAddresses::ThreeBytes(addr, addr)
+    BaseAddresses::FourBytes(addr, addr)
   }
 }
