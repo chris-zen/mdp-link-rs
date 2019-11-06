@@ -3,20 +3,19 @@
 pub mod protocol;
 
 use nrf52_radio::Radio;
-use nrf52_radio::states::*;
 use nrf52_radio::packet_config::PacketEndianess;
 use nrf52_radio::NbResult;
 
 use crate::protocol::Protocol;
 
 
-pub struct Esb<S> {
+pub struct Esb {
   protocol: Protocol,
-  radio: Radio<S>,
+  pub radio: Radio,
 }
 
-impl<S> Esb<S> {
-  pub fn new(radio: Radio<Disabled>) -> Esb<Disabled> {
+impl Esb {
+  pub fn new(radio: Radio) -> Esb {
     Esb {
       protocol: Protocol::FixedPayloadLength(32),
       radio
@@ -24,16 +23,13 @@ impl<S> Esb<S> {
   }
 
   pub fn with_radio<F>(self, transform: F) -> Self
-    where F: Fn(Radio<S>) -> Radio<S>
+    where F: Fn(Radio) -> Radio
   {
     Esb {
       radio: transform(self.radio),
       .. self
     }
   }
-}
-
-impl Esb<Disabled> {
 
   pub fn set_protocol(mut self, protocol: Protocol) -> Self {
     self.protocol = protocol;
@@ -76,20 +72,5 @@ impl Esb<Disabled> {
     self.with_radio(|radio| radio.set_crc_16bits(0xffff, 0x11021))
   }
 
-  pub fn start_rx(self, buffer: &mut [u8]) -> NbResult<Esb<Rx>> {
-    let protocol = self.protocol;
-    self.radio.enable_rx(buffer)
-        .into_idle()
-        .map(|radio_idle| radio_idle.start_rx())
-        .map(|radio_rx| Esb {
-          protocol,
-          radio: radio_rx,
-        })
-  }
-}
 
-impl<'a> Esb<Rx<'a>> {
-  pub fn read_packet(&self) -> NbResult<&[u8]> {
-    self.radio.read_packet()
-  }
 }
