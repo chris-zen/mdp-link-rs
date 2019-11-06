@@ -6,14 +6,35 @@ See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1
 
 */
 
-pub struct Disabled;
+pub enum State {
+  Disabled,
 
-pub struct RxRumpUp<'a>(pub &'a mut [u8]);
-pub struct RxIdle<'a>(pub &'a mut [u8]);
-pub struct Rx<'a>(pub &'a mut [u8]);
-pub struct RxDisable<'a>(pub &'a mut [u8]);
+  RxRumpUp,
+  RxIdle,
+  Rx,
+  RxDisable,
 
-pub struct TxDisable;
-pub struct TxRumpUp;
-pub struct TxIdle;
-pub struct Tx;
+  TxRumpUp,
+  TxIdle,
+  Tx,
+  TxDisable,
+
+  Unknown(u8),
+}
+
+impl State {
+  pub fn from_value(value: u8) -> State {
+    match value {
+      0  => State::Disabled,
+      1  => State::RxRumpUp,
+      2  => State::RxIdle,
+      3  => State::Rx,
+      4  => State::RxDisable,
+      9  => State::TxRumpUp,
+      10 => State::TxIdle,
+      11 => State::Tx,
+      12 => State::TxDisable,
+      _  => State::Unknown(value)
+    }
+  }
+}

@@ -25,7 +25,6 @@ use nrf52840_mdk::Leds;
 use nrf52_radio::radio::RadioExt;
 use nrf52_radio::tx_power::TxPower;
 use nrf52_radio::mode::Mode;
-use nrf52_radio::states::{Disabled, Rx};
 use nrf52_radio::frequency::Frequency;
 use nrf52_radio::rx_addresses::RX_ADDRESS_ALL;
 use nrf52_radio::base_address::BaseAddresses;
@@ -50,32 +49,41 @@ fn main() -> ! {
         .set_tx_power(TxPower::ZerodBm)
         .set_mode(Mode::Nrf2Mbit)
         .set_frequency(Frequency::from_2400mhz_channel(78))
-//        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
-        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xd3, 0xc2, 0xb1, 0xa0]))
-        .set_prefixes([0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
+        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
+//        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xd3, 0xc2, 0xb1, 0xa0]))
+        .set_prefixes([0xe1, 0xe0, 0xe2, 0xe3, 0xe5, 0xe0, 0xe6, 0xe7])
         .set_rx_addresses(RX_ADDRESS_ALL);
 
-    let esb_result = Esb::<Disabled>::new(radio)
+    let esb = Esb::new(radio)
         .set_protocol(EsbProtocol::fixed_payload_length(32))
-        .set_crc_16bits()
-        .start_rx(&mut buffer);
+        .set_crc_16bits();
 
-    let mut esb: Esb<Rx> = block!(esb_result).unwrap();
+    esb.radio.enable_rx(&mut buffer);
+    block!(esb.radio.wait_idle()).unwrap();
+    esb.radio.start_rx();
 
     board.leds.red.on();
 
     drop(board.uart_daplink.write_str("Listening ...\n"));
 
     loop {
-        match esb.read_packet() {
-            Ok(buffer) => {
-                for b in buffer.iter() {
-                    drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
+        match esb.radio.wait_packet_received() {
+            Ok(()) => {
+                if esb.radio.is_crc_ok() {
+                    for b in buffer.iter() {
+                        drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
+                    }
+                    drop(board.uart_daplink.write_char('\n'));
+                    board.leds.red.off();
+                    board.leds.green.on();
+                    board.leds.blue.on();
                 }
-                drop(board.uart_daplink.write_char('\n'));
-                board.leds.green.on();
-                board.leds.blue.on();
-                loop {}
+                else {
+                    drop(board.uart_daplink.write_fmt(format_args!("dai={} rxcrc={:x} ",
+                                                                   esb.radio.radio.dai.read().bits(),
+                                                                   esb.radio.radio.rxcrc.read().bits())));
+                }
+                esb.radio.start_rx();
             },
             _ => {
             }
