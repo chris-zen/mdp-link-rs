@@ -31,59 +31,61 @@ use nrf52_radio::base_address::BaseAddresses;
 
 use nrf52_radio_esb::Esb;
 use nrf52_radio_esb::protocol::Protocol as EsbProtocol;
+use crate::nrf52840_mdk::Board;
 
 #[entry]
 fn main() -> ! {
     let mut board = nrf52840_mdk::Board::take().unwrap();
     let mut timer = board.TIMER0.constrain();
 
+    drop(board.uart_daplink.write_str("Initialising ...\n"));
+
     leds_welcome(&mut board.leds, &mut timer);
 
     board.CLOCK.constrain().enable_ext_hfosc();
 
-    let mut buffer = [0x01u8; 48];
+    let mut buffer = [0x00u8; 48];
 
-    drop(board.uart_daplink.write_str("Initialising ...\n"));
-
-    let radio = board.RADIO.constrain()
-        .set_tx_power(TxPower::ZerodBm)
-        .set_mode(Mode::Nrf2Mbit)
-        .set_frequency(Frequency::from_2400mhz_channel(78))
-        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
-//        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xd3, 0xc2, 0xb1, 0xa0]))
-        .set_prefixes([0xe1, 0xe0, 0xe2, 0xe3, 0xe5, 0xe0, 0xe6, 0xe7])
-        .set_rx_addresses(RX_ADDRESS_ALL);
-
-    let esb = Esb::new(radio)
+    let esb = Esb::new(board.RADIO.constrain())
         .set_protocol(EsbProtocol::fixed_payload_length(32))
-        .set_crc_16bits();
+        .set_crc_16bits()
+        .with_radio(|radio| radio
+            .set_tx_power(TxPower::ZerodBm)
+            .set_mode(Mode::Nrf2Mbit)
+            .set_frequency(Frequency::from_2400mhz_channel(78))
+//            .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
+//            .set_base_addresses(BaseAddresses::from_same_four_bytes([0xd3, 0xc2, 0xb1, 0xa0]))
+//            .set_base_addresses(BaseAddresses::FourBytes(0xa0b1c2d3, 0xd3c2b1a0))
+            .set_base_addresses(BaseAddresses::FourBytes(0xa0b1c2d3u32.reverse_bits(), 0xd3c2b1a0u32.reverse_bits()))
+            .set_prefixes([0xe0, 0xe0, 0xe0u8.reverse_bits(), 0xe0u8.reverse_bits(), 0xe0, 0xe0, 0xe0u8.reverse_bits(), 0xe0u8.reverse_bits()])
+            .set_rx_addresses(RX_ADDRESS_ALL)
+            .enable_power()
+        );
 
-    esb.radio.enable_rx(&mut buffer);
-    block!(esb.radio.wait_idle()).unwrap();
-    esb.radio.start_rx();
+    drop(board.uart_daplink.write_str("Listening ...\n"));
 
     board.leds.red.on();
 
-    drop(board.uart_daplink.write_str("Listening ...\n"));
+    esb.radio.enable_rx(&mut buffer);
+    block!(esb.radio.wait_idle()).unwrap();
+    board.leds.red.invert();
+
+    esb.radio.start_rx(&mut buffer);
+    board.leds.red.invert();
 
     loop {
         match esb.radio.wait_packet_received() {
             Ok(()) => {
                 if esb.radio.is_crc_ok() {
-                    for b in buffer.iter() {
-                        drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
-                    }
-                    drop(board.uart_daplink.write_char('\n'));
-                    board.leds.red.off();
-                    board.leds.green.on();
-                    board.leds.blue.on();
+                    board.leds.red.invert();
+                    print_buffer(&mut board, &mut buffer);
                 }
                 else {
-                    drop(board.uart_daplink.write_fmt(format_args!("dai={} rxcrc={:x} ",
-                                                                   esb.radio.radio.dai.read().bits(),
-                                                                   esb.radio.radio.rxcrc.read().bits())));
+//                    drop(board.uart_daplink.write_fmt(format_args!("dai={} rxcrc={:x} ",
+//                                                                   esb.radio.radio.dai.read().bits(),
+//                                                                   esb.radio.radio.rxcrc.read().bits())));
                 }
-                esb.radio.start_rx();
+                esb.radio.start_rx(&mut buffer);
             },
             _ => {
             }
@@ -97,7 +99,7 @@ fn leds_welcome<T>(leds: &mut Leds, timer: &mut Timer<T>)
     where
         T: TimerExt,
 {
-    let wait_interval = 100_000;
+    let wait_interval = 50_000;
     for _ in 0..5 {
         leds.red.on();
         delay(timer, wait_interval);
@@ -122,4 +124,11 @@ fn delay<T>(timer: &mut Timer<T>, cycles: u32)
 {
     timer.start(cycles);
     drop(block!(timer.wait()));
+}
+
+fn print_buffer(board: &mut Board, buffer: &[u8]) {
+    for b in buffer.iter() {
+        drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
+    }
+    drop(board.uart_daplink.write_char('\n'));
 }

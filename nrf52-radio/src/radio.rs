@@ -6,8 +6,9 @@ See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1
 
 */
 
-use cortex_m_semihosting::{dbg, hprintln, heprintln};
+use core::sync::atomic::{compiler_fence, Ordering};
 
+use cortex_m_semihosting::{dbg, hprintln, heprintln};
 use nb;
 
 use crate::hal::target::RADIO;
@@ -276,8 +277,12 @@ impl Radio {
     self.radio.events_end.reset();
     self.radio.events_address.reset();
     self.radio.events_payload.reset();
+
+    // "Preceding reads and writes cannot be moved past subsequent writes."
+    compiler_fence(Ordering::Release);
+
     self.radio.tasks_rxen.write(|w| w.tasks_rxen().set_bit());
-    dbg!(self.radio.state.read().bits());
+//    dbg!(self.radio.state.read().bits());
   }
 
   pub fn is_ready(&self) -> bool {
@@ -294,16 +299,23 @@ impl Radio {
     }
   }
 
-  pub fn start_rx(&self) {
+  pub fn start_rx(&self, buffer: &mut [u8]) {
     // TODO check current state
 //    heprintln!("{:x}", self.radio.base0.read().bits().reverse_bits()).unwrap();
 //    heprintln!("{:x}", self.radio.base1.read().bits().reverse_bits()).unwrap();
 //    heprintln!("{:x}", self.radio.prefix0.read().bits().reverse_bits()).unwrap();
 //    heprintln!("{:x}", self.radio.prefix1.read().bits().reverse_bits()).unwrap();
+
+    self.set_packet_ptr(buffer);
+
     self.radio.events_end.reset();
     self.radio.events_address.reset();
     self.radio.events_payload.reset();
     self.radio.events_disabled.reset();
+
+    // "Preceding reads and writes cannot be moved past subsequent writes."
+    compiler_fence(Ordering::Release);
+
     self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
   }
 
@@ -316,7 +328,8 @@ impl Radio {
   }
 
   pub fn is_packet_received(&self) -> bool {
-    self.radio.events_end.read().events_end().bit_is_set()
+    self.radio.events_end.read().events_end().bit_is_set() ||
+        self.radio.events_disabled.read().events_disabled().bit_is_set()
   }
 
   pub fn is_crc_ok(&self) -> bool {
