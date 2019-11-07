@@ -38,6 +38,7 @@ use nrf52840_hal::{
     Baudrate as UartBaudrate,
   },
 };
+use embedded_hal::digital::StatefulOutputPin;
 
 
 /// The nRF52 pins that are available on the nRF52840DK
@@ -105,6 +106,16 @@ impl Led {
   pub fn off(&mut self) {
     #[allow(deprecated)]
     self.0.set_high()
+  }
+
+  /// Invert the LED
+  pub fn invert(&mut self) {
+    if self.0.is_set_low() {
+      self.off()
+    }
+    else {
+      self.on()
+    }
   }
 }
 
