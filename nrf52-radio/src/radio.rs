@@ -214,11 +214,11 @@ impl Radio {
   pub fn set_base_addresses(self, addr: BaseAddresses) -> Self {
     let (length, base0, base1) = match addr {
       BaseAddresses::TwoBytes(addr0, addr1) => (2, u32::from(addr0), u32::from(addr1)),
-      BaseAddresses::ThreeBytes(addr0, addr1) => (2, addr0 & 0xffffff, addr1 & 0xffffff),
-      BaseAddresses::FourBytes(addr0, addr1) => (2, addr0, addr1),
+      BaseAddresses::ThreeBytes(addr0, addr1) => (3, addr0 & 0xffffff, addr1 & 0xffffff),
+      BaseAddresses::FourBytes(addr0, addr1) => (4, addr0, addr1),
     };
     self.radio.pcnf1.write(|w| unsafe { w.balen().bits(length) });
-    self.radio.base0.write(|w| unsafe { w.bits(base0/*.reverse_bits()*/) } );
+    self.radio.base0.write(|w| unsafe { w.bits(base0.reverse_bits()) } );
     self.radio.base1.write(|w| unsafe { w.bits(base1.reverse_bits()) } );
     self
   }
@@ -232,7 +232,7 @@ impl Radio {
                         u32::from(prefixes[5]) << 16 |
                         u32::from(prefixes[6]) << 8 |
                         u32::from(prefixes[7]);
-    self.radio.prefix0.write(|w| unsafe { w.bits(prefix0/*.reverse_bits()*/) });
+    self.radio.prefix0.write(|w| unsafe { w.bits(prefix0.reverse_bits()) });
     self.radio.prefix1.write(|w| unsafe { w.bits(prefix1.reverse_bits()) });
     self
   }

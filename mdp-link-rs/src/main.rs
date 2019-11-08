@@ -53,11 +53,9 @@ fn main() -> ! {
             .set_tx_power(TxPower::ZerodBm)
             .set_mode(Mode::Nrf2Mbit)
             .set_frequency(Frequency::from_2400mhz_channel(78))
-//            .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
-//            .set_base_addresses(BaseAddresses::from_same_four_bytes([0xd3, 0xc2, 0xb1, 0xa0]))
-//            .set_base_addresses(BaseAddresses::FourBytes(0xa0b1c2d3, 0xd3c2b1a0))
-            .set_base_addresses(BaseAddresses::FourBytes(0xa0b1c2d3u32.reverse_bits(), 0xd3c2b1a0u32.reverse_bits()))
-            .set_prefixes([0xe0, 0xe0, 0xe0u8.reverse_bits(), 0xe0u8.reverse_bits(), 0xe0, 0xe0, 0xe0u8.reverse_bits(), 0xe0u8.reverse_bits()])
+            .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
+//            .set_base_addresses(BaseAddresses::FourBytes(0xa0b1c2d3, 0xa0b1c2d3))
+            .set_prefixes([0xe1, 0xe0, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
             .set_rx_addresses(RX_ADDRESS_ALL)
             .enable_power()
         );
@@ -76,22 +74,25 @@ fn main() -> ! {
     loop {
         match esb.radio.wait_packet_received() {
             Ok(()) => {
+                board.leds.blue.invert();
                 if esb.radio.is_crc_ok() {
                     board.leds.red.invert();
-                    print_buffer(&mut board, &mut buffer);
+                    for b in buffer.iter() {
+                        drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
+                    }
+                    drop(board.uart_daplink.write_char('\n'));
                 }
                 else {
-//                    drop(board.uart_daplink.write_fmt(format_args!("dai={} rxcrc={:x} ",
-//                                                                   esb.radio.radio.dai.read().bits(),
-//                                                                   esb.radio.radio.rxcrc.read().bits())));
+//                    drop(board.uart_daplink.write_fmt(format_args!("rxmatch={:x} rxcrc={:x} ",
+//                        esb.radio.radio.rxmatch.read().bits(),
+//                        esb.radio.radio.rxcrc.read().bits(),
+//                    )));
                 }
                 esb.radio.start_rx(&mut buffer);
             },
             _ => {
             }
         };
-
-//        delay(&mut timer, 1_000_000);
     }
 }
 
@@ -126,9 +127,3 @@ fn delay<T>(timer: &mut Timer<T>, cycles: u32)
     drop(block!(timer.wait()));
 }
 
-fn print_buffer(board: &mut Board, buffer: &[u8]) {
-    for b in buffer.iter() {
-        drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
-    }
-    drop(board.uart_daplink.write_char('\n'));
-}
