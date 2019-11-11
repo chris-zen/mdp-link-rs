@@ -33,6 +33,8 @@ use nrf52_radio_esb::Esb;
 use nrf52_radio_esb::protocol::Protocol as EsbProtocol;
 use crate::nrf52840_mdk::Board;
 
+use cortex_m_semihosting::{dbg, hprintln, heprintln};
+
 #[entry]
 fn main() -> ! {
     let mut board = nrf52840_mdk::Board::take().unwrap();
@@ -46,9 +48,14 @@ fn main() -> ! {
 
     let mut buffer = [0x00u8; 48];
 
-    let esb = Esb::new(board.RADIO.constrain())
+    let radio = board.RADIO.constrain();
+
+    hprintln!("pcfn0={:x}", radio.radio.pcnf0.read().bits());
+
+    let esb = Esb::new(radio)
         .set_protocol(EsbProtocol::fixed_payload_length(32))
         .set_crc_16bits()
+//        .set_crc_disabled()
         .with_radio(|radio| radio
             .set_tx_power(TxPower::ZerodBm)
             .set_mode(Mode::Nrf2Mbit)
@@ -59,6 +66,26 @@ fn main() -> ! {
             .set_rx_addresses(RX_ADDRESS_ALL)
             .enable_power()
         );
+
+    hprintln!("pcfn0={:x}", esb.radio.radio.pcnf0.read().bits());
+
+    esb.radio.radio.pcnf0.write(|w| unsafe { w
+        .lflen().bits(0)
+        .s0len().set_bit()
+        .s1len().bits(1)
+        .s1incl().automatic()
+    });
+
+    esb.radio.radio.pcnf1.write(|w| unsafe { w
+        .maxlen().bits(32)
+        .statlen().bits(32)
+        .balen().bits(4)
+        .endian().big()
+        .whiteen().disabled()
+    });
+
+    hprintln!("pcfn0={:08x}", esb.radio.radio.pcnf0.read().bits());
+    hprintln!("pcfn1={:08x}", esb.radio.radio.pcnf1.read().bits());
 
     drop(board.uart_daplink.write_str("Listening ...\n"));
 
@@ -83,10 +110,10 @@ fn main() -> ! {
                     drop(board.uart_daplink.write_char('\n'));
                 }
                 else {
-//                    drop(board.uart_daplink.write_fmt(format_args!("rxmatch={:x} rxcrc={:x} ",
-//                        esb.radio.radio.rxmatch.read().bits(),
-//                        esb.radio.radio.rxcrc.read().bits(),
-//                    )));
+                    drop(board.uart_daplink.write_fmt(format_args!("rxmatch={:x} rxcrc={:x} ",
+                        esb.radio.radio.rxmatch.read().bits(),
+                        esb.radio.radio.rxcrc.read().bits(),
+                    )));
                 }
                 esb.radio.start_rx(&mut buffer);
             },
