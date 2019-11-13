@@ -6,20 +6,30 @@ See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1
 
 */
 
+use core::convert::TryFrom;
 use core::sync::atomic::{compiler_fence, Ordering};
 
-use cortex_m_semihosting::{dbg, hprintln, heprintln};
+//use cortex_m_semihosting::{dbg, hprintln, heprintln};
 use nb;
 
 use crate::hal::target::RADIO;
 use crate::tx_power::TxPower;
 use crate::mode::Mode;
-use crate::packet_config::{PacketPreamble, PacketEndianess};
+use crate::packet_config::{S1IncludeInRam, Endianess, PacketConfig};
 use crate::frequency::Frequency;
 use crate::base_address::BaseAddresses;
 use crate::NbResult;
 use crate::states::State;
 
+
+macro_rules! fold {
+  ( $option:expr, $default:expr, |$value:ident| $transform:expr ) => {
+    match $option {
+      Some($value) => $transform,
+      None => $default,
+    }
+  }
+}
 
 pub trait RadioExt {
   fn constrain(self) -> Radio;
@@ -74,136 +84,66 @@ impl Radio {
     self
   }
 
-  pub fn set_packet_length_bits(self, bits: u8) -> Self {
-    self.radio.pcnf0.write(|w| unsafe { w.lflen().bits(bits) });
-    self
-  }
-
-  pub fn set_packet_s0_exclude(self) -> Self {
-    self.radio.pcnf0.write(|w| w.s0len().clear_bit());
-    self
-  }
-
-  pub fn set_packet_s0_include(self) -> Self {
-    self.radio.pcnf0.write(|w| w.s0len().set_bit());
-    self
-  }
-
-  pub fn set_packet_s1_exclude(self) -> Self {
-    self.radio.pcnf0.write(|w| unsafe { w.s1len().bits(0) });
-    self.radio.pcnf0.write(|w| w.s1incl().automatic());
-    self
-  }
-
-  pub fn set_packet_s1_include(self, bits: u8) -> Self {
-    self.radio.pcnf0.write(|w| unsafe { w.s1len().bits(bits) });
-    self.radio.pcnf0.write(|w| w.s1incl().include());
-    self
-  }
-
-  pub fn set_packet_code_indicator_length(self, len: u8) -> Self {
-    self.radio.pcnf0.write(|w| unsafe { w.cilen().bits(len) });
-    self
-  }
-
-  pub fn set_packet_preamble(self, preamble: PacketPreamble) -> Self {
-    let value = match preamble {
-      PacketPreamble::Length8Bits => 0,
-      PacketPreamble::Length16Bits => 1,
-      PacketPreamble::Length32Bits => 2,
-      PacketPreamble::LongRange => 3,
-    };
-    self.radio.pcnf0.write(|w| w.plen().bits(value));
-    self
-  }
-
-  pub fn set_packet_length_include_crc(self, include: bool) -> Self {
-    if include {
-      self.radio.pcnf0.write(|w| w.crcinc().include());
-    }
-    else {
-      self.radio.pcnf0.write(|w| w.crcinc().exclude());
-    }
-    self
-  }
-
-  pub fn set_packet_term_length(self, len: u8) -> Self {
-    self.radio.pcnf0.write(|w| unsafe { w.termlen().bits(len) });
-    self
-  }
-
-  pub fn get_packet_payload_max_length(&self) -> u8 {
-    self.radio.pcnf1.read().maxlen().bits()
-  }
-
-  pub fn set_packet_payload_max_length(self, max_len: u8) -> Self {
-    self.radio.pcnf1.write(|w| unsafe { w.maxlen().bits(max_len) });
-    self
-  }
-
-  pub fn set_packet_static_length(self, bytes: u8) -> Self {
-    self.radio.pcnf1.write(|w| unsafe { w.statlen().bits(bytes) });
-    self
-  }
-
-  pub fn set_packet_endianess(self, endianess: PacketEndianess) -> Self {
-    match endianess {
-      PacketEndianess::LittleEndian =>
-        self.radio.pcnf1.write(|w| w.endian().little()),
-      PacketEndianess::BigEndian =>
-        self.radio.pcnf1.write(|w| w.endian().big()),
-    }
-    self
-  }
-
-  pub fn set_packet_whiteen_enabled(self, enabled: bool) -> Self {
-    if enabled {
-      self.radio.pcnf1.write(|w| w.whiteen().enabled());
-    }
-    else {
-      self.radio.pcnf1.write(|w| w.whiteen().disabled());
-    }
+  pub fn set_packet_config(self, pcfn: PacketConfig) -> Self {
+    self.radio.pcnf0.write(|w| unsafe {
+      Some(w)
+        .map(|w| fold!(&pcfn.length_bits, w, |bits| w.lflen().bits(*bits)))
+        .map(|w| fold!(&pcfn.s0_byte_included, w, |included| w.s0len().bit(*included)))
+        .map(|w| fold!(&pcfn.s1_len, w, |len| w.s1len().bits(u8::try_from(len.value()).unwrap())))
+        .map(|w| fold!(&pcfn.s1_include_in_ram, w, |included| w.s1incl().bit(*included == S1IncludeInRam::Always)))
+        .map(|w| fold!(&pcfn.preamble_len, w, |len| w.plen().bits(u8::try_from(len.value()).unwrap())))
+        .map(|w| fold!(&pcfn.crc_included_in_length, w, |included| w.crcinc().bit(*included)))
+        .unwrap()
+    });
+    self.radio.pcnf1.write(|w| unsafe {
+      Some(w)
+        .map(|w| fold!(&pcfn.max_bytes, w, |bytes| w.maxlen().bits(*bytes)))
+        .map(|w| fold!(&pcfn.static_bytes, w, |bytes| w.statlen().bits(*bytes)))
+        .map(|w| fold!(&pcfn.endianess, w, |endianess| w.endian().bit(*endianess == Endianess::BigEndian)))
+        .map(|w| fold!(&pcfn.whitening_enabled, w, |enabled| w.whiteen().bit(*enabled)))
+        .unwrap()
+    });
     self
   }
 
   pub fn set_crc_disabled(self) -> Self {
-    self.radio.crccnf.write(|w| w.len().disabled());
+    self.radio.crccnf.modify(|_, w| w.len().disabled());
     self
   }
 
   pub fn set_crc_8bits(self, initial: u8, polynomial: u32) -> Self {
-    self.radio.crccnf.write(|w| w.len().one());
+    self.radio.crccnf.modify(|_, w| w.len().one());
     self.radio.crcinit.write(|w| unsafe { w.bits(initial.into()) });
     self.radio.crcpoly.write(|w| unsafe { w.bits(polynomial) });
     self
   }
 
   pub fn set_crc_16bits(self, initial: u16, polynomial: u32) -> Self {
-    self.radio.crccnf.write(|w| w.len().two());
+    self.radio.crccnf.modify(|_, w| w.len().two());
     self.radio.crcinit.write(|w| unsafe { w.bits(initial.into()) });
     self.radio.crcpoly.write(|w| unsafe { w.bits(polynomial) });
     self
   }
 
   pub fn set_crc_24bits(self, initial: u32, polynomial: u32) -> Self {
-    self.radio.crccnf.write(|w| w.len().three());
+    self.radio.crccnf.modify(|_, w| w.len().three());
     self.radio.crcinit.write(|w| unsafe { w.crcinit().bits(initial) });
     self.radio.crcpoly.write(|w| unsafe { w.bits(polynomial) });
     self
   }
 
   pub fn set_crc_include_address(self) -> Self {
-    self.radio.crccnf.write(|w| w.skipaddr().include());
+    self.radio.crccnf.modify(|_, w| w.skipaddr().include());
     self
   }
 
   pub fn set_crc_skip_address(self) -> Self {
-    self.radio.crccnf.write(|w| w.skipaddr().skip());
+    self.radio.crccnf.modify(|_, w| w.skipaddr().skip());
     self
   }
 
   pub fn set_crc_ieee802154(self) -> Self {
-    self.radio.crccnf.write(|w| w.skipaddr().include());
+    self.radio.crccnf.modify(|_, w| w.skipaddr().include());
     self
   }
 
@@ -217,7 +157,7 @@ impl Radio {
       BaseAddresses::ThreeBytes(addr0, addr1) => (3, addr0 & 0xffffff, addr1 & 0xffffff),
       BaseAddresses::FourBytes(addr0, addr1) => (4, addr0, addr1),
     };
-    self.radio.pcnf1.write(|w| unsafe { w.balen().bits(length) });
+    self.radio.pcnf1.modify(|_, w| unsafe { w.balen().bits(length) });
     self.radio.base0.write(|w| unsafe { w.bits(base0.reverse_bits()) } );
     self.radio.base1.write(|w| unsafe { w.bits(base1.reverse_bits()) } );
     self
@@ -247,15 +187,9 @@ impl Radio {
   /// 6.20.14.10 FREQUENCY
   pub fn set_frequency(self, freq: Frequency) -> Self {
     self.radio.frequency.write(|w| unsafe {
-      let channel = match freq {
-        Frequency::Default2400MHz(channel) => {
-          w.map().default();
-          channel
-        },
-        Frequency::Low2360MHz(channel) => {
-          w.map().low();
-          channel
-        },
+      let (channel, w) = match freq {
+        Frequency::Default2400MHz(channel) => (channel, w.map().default()),
+        Frequency::Low2360MHz(channel) => (channel, w.map().low())
       };
       assert!(channel <= 100);
       w.frequency().bits(channel)
@@ -282,7 +216,6 @@ impl Radio {
     compiler_fence(Ordering::Release);
 
     self.radio.tasks_rxen.write(|w| w.tasks_rxen().set_bit());
-//    dbg!(self.radio.state.read().bits());
   }
 
   pub fn is_ready(&self) -> bool {

@@ -3,6 +3,7 @@
 use nrf52840_hal as hal;
 use nb;
 
+mod values_as_enum;
 pub mod tx_power;
 pub mod mode;
 pub mod packet_config;

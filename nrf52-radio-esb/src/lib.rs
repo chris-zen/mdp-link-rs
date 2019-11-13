@@ -3,8 +3,8 @@
 pub mod protocol;
 
 use nrf52_radio::Radio;
-use nrf52_radio::packet_config::PacketEndianess;
-use nrf52_radio::NbResult;
+use nrf52_radio::packet_config::{S1Length, S1IncludeInRam, Endianess, PacketConfig};
+//use nrf52_radio::NbResult;
 
 use crate::protocol::Protocol;
 
@@ -34,29 +34,31 @@ impl Esb {
   pub fn set_protocol(mut self, protocol: Protocol) -> Self {
     self.protocol = protocol;
     self.with_radio(|radio| {
-      match protocol {
+      let pcfn = match protocol {
+        Protocol::FixedPayloadLength(length) =>
+          PacketConfig::default()
+              .with_length_bits(0)
+              .with_s0_byte_included(true)
+              .with_s1_len(S1Length::Of1Bits)
+              .with_s1_include_in_ram(S1IncludeInRam::Automatic)
+              .with_max_bytes(length)
+              .with_static_bytes(length)
+              .with_endianess(Endianess::BigEndian)
+              .with_whitening_enabled(false),
         Protocol::DynamicPayloadLength(max_length) => {
           let length_bits = if max_length <= 32 { 6 } else { 8 };
-          radio
-              .set_packet_length_bits(length_bits)
-              .set_packet_s0_exclude()
-              .set_packet_s1_include(3)
-              .set_packet_payload_max_length(max_length)
-              .set_packet_static_length(0)
-              .set_packet_endianess(PacketEndianess::BigEndian)
-              .set_packet_whiteen_enabled(false)
-        },
-        Protocol::FixedPayloadLength(length) => {
-          radio
-              .set_packet_length_bits(0)
-              .set_packet_s0_include()
-              .set_packet_s1_include(1)
-              .set_packet_payload_max_length(length)
-              .set_packet_static_length(length)
-              .set_packet_endianess(PacketEndianess::BigEndian)
-              .set_packet_whiteen_enabled(false)
-        },
-      }
+          PacketConfig::default()
+              .with_length_bits(length_bits)
+              .with_s0_byte_included(false)
+              .with_s1_len(S1Length::Of3Bits)
+              .with_s1_include_in_ram(S1IncludeInRam::Automatic)
+              .with_max_bytes(max_length)
+              .with_static_bytes(0)
+              .with_endianess(Endianess::BigEndian)
+              .with_whitening_enabled(false)
+        }
+      };
+      radio.set_packet_config(pcfn)
     })
   }
 
@@ -71,6 +73,5 @@ impl Esb {
   pub fn set_crc_16bits(self) -> Self {
     self.with_radio(|radio| radio.set_crc_16bits(0xffff, 0x11021))
   }
-
 
 }
