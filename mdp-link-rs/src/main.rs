@@ -50,42 +50,21 @@ fn main() -> ! {
 
     let radio = board.RADIO.constrain();
 
-    hprintln!("pcfn0={:x}", radio.radio.pcnf0.read().bits());
-
     let esb = Esb::new(radio)
         .set_protocol(EsbProtocol::fixed_payload_length(32))
         .set_crc_16bits()
-//        .set_crc_disabled()
         .with_radio(|radio| radio
             .set_tx_power(TxPower::ZerodBm)
             .set_mode(Mode::Nrf2Mbit)
             .set_frequency(Frequency::from_2400mhz_channel(78))
             .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
-//            .set_base_addresses(BaseAddresses::FourBytes(0xa0b1c2d3, 0xa0b1c2d3))
             .set_prefixes([0xe1, 0xe0, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
             .set_rx_addresses(RX_ADDRESS_ALL)
             .enable_power()
         );
 
-    hprintln!("pcfn0={:x}", esb.radio.radio.pcnf0.read().bits());
-
-    esb.radio.radio.pcnf0.write(|w| unsafe { w
-        .lflen().bits(0)
-        .s0len().set_bit()
-        .s1len().bits(1)
-        .s1incl().automatic()
-    });
-
-    esb.radio.radio.pcnf1.write(|w| unsafe { w
-        .maxlen().bits(32)
-        .statlen().bits(32)
-        .balen().bits(4)
-        .endian().big()
-        .whiteen().disabled()
-    });
-
-    hprintln!("pcfn0={:08x}", esb.radio.radio.pcnf0.read().bits());
-    hprintln!("pcfn1={:08x}", esb.radio.radio.pcnf1.read().bits());
+//    hprintln!("pcfn0={:08x}", esb.radio.radio.pcnf0.read().bits()).unwrap();
+//    hprintln!("pcfn1={:08x}", esb.radio.radio.pcnf1.read().bits()).unwrap();
 
     drop(board.uart_daplink.write_str("Listening ...\n"));
 
