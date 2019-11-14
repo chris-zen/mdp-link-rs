@@ -1,18 +1,18 @@
-/*!
-
-nrf52840 Radio
-
-See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1.0.pdf): 6.20 RADIO — 2.4 GHz radio
-
-*/
+///!
+///!
+///! nrf52840 Radio
+///!
+///! See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1.0.pdf): 6.20 RADIO — 2.4 GHz radio
+///!
 
 use core::convert::TryFrom;
 use core::sync::atomic::{compiler_fence, Ordering};
-
+//use core::ops::Deref;
 //use cortex_m_semihosting::{dbg, hprintln, heprintln};
 use nb;
 
 use crate::hal::target::RADIO;
+use crate::hal::clocks::ExternalOscillator;
 use crate::tx_power::TxPower;
 use crate::mode::Mode;
 use crate::packet_config::{S1IncludeInRam, Endianess, PacketConfig};
@@ -20,9 +20,10 @@ use crate::frequency::Frequency;
 use crate::base_address::BaseAddresses;
 use crate::NbResult;
 use crate::states::State;
+use nrf52840_hal::Clocks;
 
 
-macro_rules! fold {
+macro_rules! map_or {
   ( $option:expr, $default:expr, |$value:ident| $transform:expr ) => {
     match $option {
       Some($value) => $transform,
@@ -32,112 +33,124 @@ macro_rules! fold {
 }
 
 pub trait RadioExt {
-  fn constrain(self) -> Radio;
+  fn constrain<A, B>(self, clocks: &Clocks<ExternalOscillator, A, B>) -> Radio<A, B>;
 }
 
 impl RadioExt for RADIO {
-  fn constrain(self) -> Radio {
+  fn constrain<A, B>(self, clocks: &Clocks<ExternalOscillator, A, B>) -> Radio<A, B> {
     Radio {
-      radio: self
+      radio: self,
+      clocks,
     }
   }
 }
 
-pub struct Radio {
+//struct RadioX<T> {
+//  regs: T
+//}
+//
+//impl<T> RadioX<T> where T: Deref<Target=crate::hal::target::radio::RegisterBlock> {
+//  pub fn foo(&self) {
+//    self.regs.power.write(|w| w.power().enabled());
+//  }
+//}
+
+pub struct Radio<'a, A, B> {
   pub radio: RADIO,
+  clocks: &'a Clocks<ExternalOscillator, A, B>,
 }
 
-impl Radio {
+impl<'a, A, B> Radio<'a, A, B> {
 
-  pub fn enable_interrupts(self, bits: u32) -> Self {
+  pub fn enable_interrupts(&self, bits: u32) -> &Self {
     self.radio.intenset.write(|w| unsafe { w.bits(bits) });
     self
   }
 
-  pub fn disable_interrupts(self, bits: u32) -> Self {
+  pub fn disable_interrupts(&self, bits: u32) -> &Self {
     self.radio.intenclr.write(|w| unsafe { w.bits(bits) });
     self
   }
 
-  pub fn disable_all_interrupts(self) -> Self {
+  pub fn disable_all_interrupts(&self) -> &Self {
     self.radio.intenclr.write(|w| unsafe { w.bits(0xffffffff) });
     self
   }
 
-  pub fn enable_power(self) -> Self {
+  pub fn enable_power(&self) -> &Self {
     self.radio.power.write(|w| w.power().enabled());
     self
   }
 
-  pub fn disable_power(self) -> Self {
+  pub fn disable_power(&self) -> &Self {
     self.radio.power.write(|w| w.power().enabled());
     self
   }
 
-  pub fn set_tx_power(self, tx_power: TxPower) -> Self {
+  pub fn set_tx_power(&self, tx_power: TxPower) -> &Self {
     self.radio.txpower.write(|w| unsafe { w.bits(tx_power.value()) });
     self
   }
 
-  pub fn set_mode(self, mode: Mode) -> Self {
+  pub fn set_mode(&self, mode: Mode) -> &Self {
     self.radio.mode.write(|w| unsafe { w.bits(mode.value()) });
     self
   }
 
-  pub fn set_packet_config(self, pcfn: PacketConfig) -> Self {
-    self.radio.pcnf0.write(|w| unsafe {
+  pub fn set_packet_config(&self, pcfn: PacketConfig) -> &Self {
+    self.radio.pcnf0.modify(|_, w| unsafe {
       Some(w)
-        .map(|w| fold!(&pcfn.length_bits, w, |bits| w.lflen().bits(*bits)))
-        .map(|w| fold!(&pcfn.s0_byte_included, w, |included| w.s0len().bit(*included)))
-        .map(|w| fold!(&pcfn.s1_len, w, |len| w.s1len().bits(u8::try_from(len.value()).unwrap())))
-        .map(|w| fold!(&pcfn.s1_include_in_ram, w, |included| w.s1incl().bit(*included == S1IncludeInRam::Always)))
-        .map(|w| fold!(&pcfn.preamble_len, w, |len| w.plen().bits(u8::try_from(len.value()).unwrap())))
-        .map(|w| fold!(&pcfn.crc_included_in_length, w, |included| w.crcinc().bit(*included)))
+        .map(|w| map_or!(&pcfn.length_bits, w, |bits| w.lflen().bits(*bits)))
+        .map(|w| map_or!(&pcfn.s0_byte_included, w, |included| w.s0len().bit(*included)))
+        .map(|w| map_or!(&pcfn.s1_len, w, |len| w.s1len().bits(u8::try_from(len.value()).unwrap())))
+        .map(|w| map_or!(&pcfn.s1_include_in_ram, w, |included| w.s1incl().bit(*included == S1IncludeInRam::Always)))
+        .map(|w| map_or!(&pcfn.preamble_len, w, |len| w.plen().bits(u8::try_from(len.value()).unwrap())))
+        .map(|w| map_or!(&pcfn.crc_included_in_length, w, |included| w.crcinc().bit(*included)))
         .unwrap()
     });
-    self.radio.pcnf1.write(|w| unsafe {
+    self.radio.pcnf1.modify(|_, w| unsafe {
       Some(w)
-        .map(|w| fold!(&pcfn.max_bytes, w, |bytes| w.maxlen().bits(*bytes)))
-        .map(|w| fold!(&pcfn.static_bytes, w, |bytes| w.statlen().bits(*bytes)))
-        .map(|w| fold!(&pcfn.endianess, w, |endianess| w.endian().bit(*endianess == Endianess::BigEndian)))
-        .map(|w| fold!(&pcfn.whitening_enabled, w, |enabled| w.whiteen().bit(*enabled)))
+        .map(|w| map_or!(&pcfn.max_bytes, w, |bytes| w.maxlen().bits(*bytes)))
+        .map(|w| map_or!(&pcfn.static_bytes, w, |bytes| w.statlen().bits(*bytes)))
+        .map(|w| map_or!(&pcfn.endianess, w, |endianess| w.endian().bit(*endianess == Endianess::BigEndian)))
+        .map(|w| map_or!(&pcfn.whitening_enabled, w, |enabled| w.whiteen().bit(*enabled)))
         .unwrap()
     });
     self
   }
 
-  pub fn set_crc_disabled(self) -> Self {
+  pub fn set_crc_disabled(&self) -> &Self {
     self.radio.crccnf.modify(|_, w| w.len().disabled());
     self
   }
 
-  pub fn set_crc_8bits(self, initial: u8, polynomial: u32) -> Self {
+  pub fn set_crc_8bits(&self, initial: u8, polynomial: u32) -> &Self {
     self.radio.crccnf.modify(|_, w| w.len().one());
     self.radio.crcinit.write(|w| unsafe { w.bits(initial.into()) });
     self.radio.crcpoly.write(|w| unsafe { w.bits(polynomial) });
     self
   }
 
-  pub fn set_crc_16bits(self, initial: u16, polynomial: u32) -> Self {
+  pub fn set_crc_16bits(&self, initial: u16, polynomial: u32) -> &Self {
     self.radio.crccnf.modify(|_, w| w.len().two());
     self.radio.crcinit.write(|w| unsafe { w.bits(initial.into()) });
     self.radio.crcpoly.write(|w| unsafe { w.bits(polynomial) });
     self
   }
 
-  pub fn set_crc_24bits(self, initial: u32, polynomial: u32) -> Self {
+  pub fn set_crc_24bits(&self, initial: u32, polynomial: u32) -> &Self {
     self.radio.crccnf.modify(|_, w| w.len().three());
     self.radio.crcinit.write(|w| unsafe { w.crcinit().bits(initial) });
     self.radio.crcpoly.write(|w| unsafe { w.bits(polynomial) });
     self
   }
 
-  pub fn set_crc_include_address(self) -> Self {
+  pub fn set_crc_include_address(&self) -> &Self {
     self.radio.crccnf.modify(|_, w| w.skipaddr().include());
     self
   }
 
-  pub fn set_crc_skip_address(self) -> Self {
+  pub fn set_crc_skip_address(&self) -> &Self {
     self.radio.crccnf.modify(|_, w| w.skipaddr().skip());
     self
   }
@@ -151,7 +164,7 @@ impl Radio {
     State::from_value(self.radio.state.read().state().bits())
   }
 
-  pub fn set_base_addresses(self, addr: BaseAddresses) -> Self {
+  pub fn set_base_addresses(&self, addr: BaseAddresses) -> &Self {
     let (length, base0, base1) = match addr {
       BaseAddresses::TwoBytes(addr0, addr1) => (2, u32::from(addr0), u32::from(addr1)),
       BaseAddresses::ThreeBytes(addr0, addr1) => (3, addr0 & 0xffffff, addr1 & 0xffffff),
@@ -163,7 +176,7 @@ impl Radio {
     self
   }
 
-  pub fn set_prefixes(self, prefixes: [u8; 8]) -> Self {
+  pub fn set_prefixes(&self, prefixes: [u8; 8]) -> &Self {
     let prefix0 = u32::from(prefixes[0]) << 24 |
                         u32::from(prefixes[1]) << 16 |
                         u32::from(prefixes[2]) << 8 |
@@ -185,7 +198,7 @@ impl Radio {
   }
 
   /// 6.20.14.10 FREQUENCY
-  pub fn set_frequency(self, freq: Frequency) -> Self {
+  pub fn set_frequency(&self, freq: Frequency) -> &Self {
     self.radio.frequency.write(|w| unsafe {
       let (channel, w) = match freq {
         Frequency::Default2400MHz(channel) => (channel, w.map().default()),
@@ -198,7 +211,8 @@ impl Radio {
   }
 
   /// Receive address select. 6.20.14.20 RXADDRESSES
-  pub fn set_rx_addresses(self, mask: u8) -> Self {
+  // TODO use a library for bit fields
+  pub fn set_rx_addresses(&self, mask: u8) -> &Self {
     self.radio.rxaddresses.write(|w| unsafe { w.bits(mask.into()) });
     self
   }
@@ -234,10 +248,6 @@ impl Radio {
 
   pub fn start_rx(&self, buffer: &mut [u8]) {
     // TODO check current state
-//    heprintln!("{:x}", self.radio.base0.read().bits().reverse_bits()).unwrap();
-//    heprintln!("{:x}", self.radio.base1.read().bits().reverse_bits()).unwrap();
-//    heprintln!("{:x}", self.radio.prefix0.read().bits().reverse_bits()).unwrap();
-//    heprintln!("{:x}", self.radio.prefix1.read().bits().reverse_bits()).unwrap();
 
     self.set_packet_ptr(buffer);
 
@@ -292,6 +302,10 @@ impl Radio {
 
   pub fn disable(&self) {
     self.radio.events_disabled.reset();
+
+    // "Preceding reads and writes cannot be moved past subsequent writes."
+    compiler_fence(Ordering::Release);
+
     self.radio.tasks_disable.write(|w| w.tasks_disable().set_bit());
   }
 

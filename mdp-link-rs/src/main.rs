@@ -44,24 +44,22 @@ fn main() -> ! {
 
     leds_welcome(&mut board.leds, &mut timer);
 
-    board.CLOCK.constrain().enable_ext_hfosc();
+    let clocks = board.CLOCK.constrain().enable_ext_hfosc();
 
     let mut buffer = [0x00u8; 48];
 
-    let radio = board.RADIO.constrain();
+    let radio = board.RADIO.constrain(&clocks);
+    radio
+        .set_tx_power(TxPower::ZerodBm)
+        .set_mode(Mode::Nrf2Mbit)
+        .set_frequency(Frequency::from_2400mhz_channel(78))
+        .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
+        .set_prefixes([0xe1, 0xe0, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
+        .set_rx_addresses(RX_ADDRESS_ALL)
+        .enable_power();
 
-    let esb = Esb::new(radio)
-        .set_protocol(EsbProtocol::fixed_payload_length(32))
-        .set_crc_16bits()
-        .with_radio(|radio| radio
-            .set_tx_power(TxPower::ZerodBm)
-            .set_mode(Mode::Nrf2Mbit)
-            .set_frequency(Frequency::from_2400mhz_channel(78))
-            .set_base_addresses(BaseAddresses::from_same_four_bytes([0xa0, 0xb1, 0xc2, 0xd3]))
-            .set_prefixes([0xe1, 0xe0, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7])
-            .set_rx_addresses(RX_ADDRESS_ALL)
-            .enable_power()
-        );
+    let esb = Esb::new(radio, EsbProtocol::fixed_payload_length(32));
+    esb.set_crc_16bits();
 
 //    hprintln!("pcfn0={:08x}", esb.radio.radio.pcnf0.read().bits()).unwrap();
 //    hprintln!("pcfn1={:08x}", esb.radio.radio.pcnf1.read().bits()).unwrap();
