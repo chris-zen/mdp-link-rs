@@ -18,7 +18,6 @@ use crate::mode::Mode;
 use crate::packet_config::{S1IncludeInRam, Endianess, PacketConfig};
 use crate::frequency::Frequency;
 use crate::base_address::BaseAddresses;
-use crate::NbResult;
 use crate::states::State;
 use nrf52840_hal::Clocks;
 
@@ -32,16 +31,26 @@ macro_rules! map_or {
   }
 }
 
+pub type Result<A> = core::result::Result<A, Error>;
+pub type AsyncResult<T> = nb::Result<T, Error>;
+
+#[derive(Debug, Clone)]
+pub enum Error {
+  WrongState,
+}
+
 pub trait RadioExt {
-  fn constrain<A, B>(self, clocks: &Clocks<ExternalOscillator, A, B>) -> Radio<A, B>;
+  fn constrain<'a, LFOSC, LFSTAT>(self,
+                                  clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
+                                  buffer: &'a mut [u8]) -> Radio<'a, LFOSC, LFSTAT>;
 }
 
 impl RadioExt for RADIO {
-  fn constrain<A, B>(self, clocks: &Clocks<ExternalOscillator, A, B>) -> Radio<A, B> {
-    Radio {
-      radio: self,
-      clocks,
-    }
+  fn constrain<'a, LFOSC, LFSTAT>(self,
+                                  clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
+                                  buffer: &'a mut [u8]) -> Radio<'a, LFOSC, LFSTAT> {
+
+    Radio::new(self, clocks, buffer)
   }
 }
 
@@ -55,12 +64,24 @@ impl RadioExt for RADIO {
 //  }
 //}
 
-pub struct Radio<'a, A, B> {
+pub struct Radio<'a, LFOSC, LFSTAT> {
+  clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
   pub radio: RADIO,
-  clocks: &'a Clocks<ExternalOscillator, A, B>,
+  buffer: &'a mut [u8],
 }
 
-impl<'a, A, B> Radio<'a, A, B> {
+impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
+
+  pub fn new(radio: RADIO,
+             clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
+             buffer: &'a mut [u8]) -> Self {
+
+    Radio {
+      radio,
+      clocks,
+      buffer,
+    }
+  }
 
   pub fn enable_interrupts(&self, bits: u32) -> &Self {
     self.radio.intenset.write(|w| unsafe { w.bits(bits) });
@@ -160,10 +181,6 @@ impl<'a, A, B> Radio<'a, A, B> {
     self
   }
 
-  pub fn get_state(&self) -> State {
-    State::from_value(self.radio.state.read().state().bits())
-  }
-
   pub fn set_base_addresses(&self, addr: BaseAddresses) -> &Self {
     let (length, base0, base1) = match addr {
       BaseAddresses::TwoBytes(addr0, addr1) => (2, u32::from(addr0), u32::from(addr1)),
@@ -190,13 +207,6 @@ impl<'a, A, B> Radio<'a, A, B> {
     self
   }
 
-  /// 6.20.14.9 PACKETPTR
-  /// Not sure to expose this, we need to play well with ownership and borrowing
-  fn set_packet_ptr(&self, buffer: &mut [u8]) {
-    let ptr = buffer.as_ptr() as u32;
-    self.radio.packetptr.write(|w| unsafe { w.bits(ptr) });
-  }
-
   /// 6.20.14.10 FREQUENCY
   pub fn set_frequency(&self, freq: Frequency) -> &Self {
     self.radio.frequency.write(|w| unsafe {
@@ -210,56 +220,19 @@ impl<'a, A, B> Radio<'a, A, B> {
     self
   }
 
-  /// Receive address select. 6.20.14.20 RXADDRESSES
+  /// 6.20.14.20 RXADDRESSES: Receive address select
   // TODO use a library for bit fields
   pub fn set_rx_addresses(&self, mask: u8) -> &Self {
     self.radio.rxaddresses.write(|w| unsafe { w.bits(mask.into()) });
     self
   }
 
-  pub fn enable_rx(&self, buffer: &mut [u8]) {
-    // TODO check current state
-    self.set_packet_ptr(buffer);
-    self.radio.events_ready.reset();
-    self.radio.events_disabled.reset();
-    self.radio.events_end.reset();
-    self.radio.events_address.reset();
-    self.radio.events_payload.reset();
-
-    // "Preceding reads and writes cannot be moved past subsequent writes."
-    compiler_fence(Ordering::Release);
-
-    self.radio.tasks_rxen.write(|w| w.tasks_rxen().set_bit());
+  pub fn get_state(&self) -> State {
+    State::from_value(self.radio.state.read().state().bits())
   }
 
   pub fn is_ready(&self) -> bool {
     self.radio.events_ready.read().events_ready().bit_is_set()
-  }
-
-  pub fn wait_idle(&self) -> NbResult<()> {
-    if self.is_ready() {
-      self.radio.events_ready.reset();
-      Ok(())
-    }
-    else {
-      Err(nb::Error::WouldBlock)
-    }
-  }
-
-  pub fn start_rx(&self, buffer: &mut [u8]) {
-    // TODO check current state
-
-    self.set_packet_ptr(buffer);
-
-    self.radio.events_end.reset();
-    self.radio.events_address.reset();
-    self.radio.events_payload.reset();
-    self.radio.events_disabled.reset();
-
-    // "Preceding reads and writes cannot be moved past subsequent writes."
-    compiler_fence(Ordering::Release);
-
-    self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
   }
 
   pub fn is_address_received(&self) -> bool {
@@ -279,15 +252,82 @@ impl<'a, A, B> Radio<'a, A, B> {
     self.radio.crcstatus.read().crcstatus().is_crcok()
   }
 
-  pub fn wait_packet_received(&self) -> NbResult<()> {
+  pub fn is_disabled(&self) -> bool {
+    self.radio.events_disabled.read().events_disabled().bit_is_set()
+  }
+
+  /// 6.20.14.9 PACKETPTR
+  fn set_packet_ptr(&self, buffer: &[u8]) {
+    let ptr = buffer.as_ptr() as u32;
+    self.radio.packetptr.write(|w| unsafe { w.bits(ptr) });
+  }
+
+  pub fn get_buffer(&self) -> &[u8] {
+    self.buffer
+  }
+
+  pub fn get_buffer_mut(&mut self) -> &mut [u8] {
+    self.buffer
+  }
+
+  pub fn enable_rx(&self) -> Result<()> {
+    match self.get_state() {
+      State::Disabled => {
+        self.set_packet_ptr(self.buffer);
+
+        self.radio.events_ready.reset();
+        self.radio.events_disabled.reset();
+        self.radio.events_end.reset();
+        self.radio.events_address.reset();
+        self.radio.events_payload.reset();
+
+        // "Preceding reads and writes cannot be moved past subsequent writes."
+        compiler_fence(Ordering::Release);
+
+        self.radio.tasks_rxen.write(|w| w.tasks_rxen().set_bit());
+
+        Ok(())
+      },
+      _ => Err(Error::WrongState)
+    }
+  }
+
+  pub fn wait_idle(&self) -> AsyncResult<()> {
+    if self.is_ready() {
+      self.radio.events_ready.reset();
+      Ok(())
+    }
+    else {
+      Err(nb::Error::WouldBlock)
+    }
+  }
+
+  pub fn start_rx(&self) -> Result<()> {
+    match self.get_state() {
+      State::RxIdle => {
+        self.set_packet_ptr(self.buffer);
+
+        self.radio.events_end.reset();
+        self.radio.events_address.reset();
+        self.radio.events_payload.reset();
+        self.radio.events_disabled.reset();
+
+        // "Preceding reads and writes cannot be moved past subsequent writes."
+        compiler_fence(Ordering::Release);
+
+        self.radio.tasks_start.write(|w| w.tasks_start().set_bit());
+
+        Ok(())
+      },
+      _ => Err(Error::WrongState)
+    }
+  }
+
+  pub fn wait_packet_received(&self) -> AsyncResult<()> {
     if self.is_packet_received() {
       self.radio.events_end.reset();
       self.radio.events_address.reset();
       self.radio.events_payload.reset();
-//      dbg!(self.radio.crcstatus.read().bits());
-//      dbg!(self.radio.rxmatch.read().bits());
-//      dbg!(self.radio.rxcrc.read().bits());
-//      dbg!(self.radio.dai.read().bits());
       Ok(())
     }
     else {
@@ -309,11 +349,7 @@ impl<'a, A, B> Radio<'a, A, B> {
     self.radio.tasks_disable.write(|w| w.tasks_disable().set_bit());
   }
 
-  pub fn is_disabled(&self) -> bool {
-    self.radio.events_disabled.read().events_disabled().bit_is_set()
-  }
-
-  pub fn wait_disabled(&self) -> NbResult<()> {
+  pub fn wait_disabled(&self) -> AsyncResult<()> {
     if self.is_disabled() {
       self.radio.events_disabled.reset();
       Ok(())
