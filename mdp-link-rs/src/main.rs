@@ -46,9 +46,9 @@ fn main() -> ! {
 
     let clocks = board.CLOCK.constrain().enable_ext_hfosc();
 
-    let mut buffer = [0x00u8; 48];
+    let mut buffer = [0x00u8; 34];
 
-    let radio = board.RADIO.constrain(&clocks);
+    let radio = board.RADIO.constrain(&clocks, &mut buffer);
     radio
         .set_tx_power(TxPower::ZerodBm)
         .set_mode(Mode::Nrf2Mbit)
@@ -58,7 +58,7 @@ fn main() -> ! {
         .set_rx_addresses(RX_ADDRESS_ALL)
         .enable_power();
 
-    let esb = Esb::new(radio, EsbProtocol::fixed_payload_length(32));
+    let mut esb = Esb::new(radio, EsbProtocol::fixed_payload_length(32));
     esb.set_crc_16bits();
 
 //    hprintln!("pcfn0={:08x}", esb.radio.radio.pcnf0.read().bits()).unwrap();
@@ -68,34 +68,31 @@ fn main() -> ! {
 
     board.leds.red.on();
 
-    esb.radio.enable_rx(&mut buffer);
-    block!(esb.radio.wait_idle()).unwrap();
-    board.leds.red.invert();
-
-    esb.radio.start_rx(&mut buffer);
-    board.leds.red.invert();
+    esb.start_receive().unwrap();
 
     loop {
-        match esb.radio.wait_packet_received() {
+        match esb.wait_receive() {
             Ok(()) => {
                 board.leds.blue.invert();
+                // TODO include crc check within wait_receive
                 if esb.radio.is_crc_ok() {
+                    // TODO switch buffer and start_receive
                     board.leds.red.invert();
-                    for b in buffer.iter() {
+                    for b in esb.radio.get_buffer().iter().skip(2) {
                         drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
                     }
                     drop(board.uart_daplink.write_char('\n'));
                 }
                 else {
-                    drop(board.uart_daplink.write_fmt(format_args!("rxmatch={:x} rxcrc={:x} ",
-                        esb.radio.radio.rxmatch.read().bits(),
-                        esb.radio.radio.rxcrc.read().bits(),
-                    )));
+//                    drop(board.uart_daplink.write_fmt(format_args!("rxmatch={:x} rxcrc={:x} ",
+//                        esb.radio.radio.rxmatch.read().bits(),
+//                        esb.radio.radio.rxcrc.read().bits(),
+//                    )));
                 }
-                esb.radio.start_rx(&mut buffer);
+                esb.start_receive().unwrap();
             },
-            _ => {
-            }
+            Err(nb::Error::Other(esb_error)) => panic!("{:?}", esb_error),
+            Err(nb::Error::WouldBlock) => {}
         };
     }
 }

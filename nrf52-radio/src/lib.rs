@@ -1,7 +1,9 @@
 #![no_std]
 
-use nrf52840_hal as hal;
 use nb;
+use nrf52840_hal as hal;
+
+pub use radio::{AsyncResult, Error, Radio, RadioExt, Result};
 
 mod values_as_enum;
 pub mod tx_power;
@@ -13,6 +15,3 @@ pub mod rx_addresses;
 pub mod states;
 pub mod radio;
 
-pub use radio::{Radio, RadioExt};
-
-pub type NbResult<T> = nb::Result<T, nb::Error<()>>;
