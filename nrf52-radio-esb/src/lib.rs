@@ -116,14 +116,7 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
   pub fn start_receive(&mut self) -> Result<()> {
     match self.state {
       State::Standby => {
-        self.state = State::Receiving(match self.radio.get_state() {
-          RadioState::Disabled  => Receiving::RequiresEnable,
-          RadioState::RxRumpUp  => Receiving::WaitingIdle,
-          RadioState::RxIdle    => Receiving::RequiresStart,
-          RadioState::Rx        => Receiving::WaitingPacket,
-          RadioState::RxDisable => Receiving::WaitingDisable,
-          _                     => Receiving::RequiresDisable,
-        });
+        self.state = State::Receiving(self.receiving_step_from_radio_state());
         Ok(())
       },
       _ => Err(Error::StandbyRequired)
@@ -148,7 +141,18 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
             Err(radio_error) => (State::Error, Err(nb::Error::Other(Error::RadioError(radio_error)))),
           },
           Receiving::WaitingPacket => match self.radio.wait_packet_received() {
-            Ok(()) => (State::Standby, Ok(())),
+            Ok(()) => {
+              if self.radio.is_crc_ok() {
+                (State::Standby, Ok(()))
+              }
+              else {
+                (
+                  // TODO maximum number of CRC retries
+                  State::Receiving(self.receiving_step_from_radio_state()),
+                  Err(nb::Error::WouldBlock)
+                )
+              }
+            },
             Err(nb::Error::WouldBlock) => (self.state.clone(), Err(nb::Error::WouldBlock)),
             Err(nb::Error::Other(radio_error)) => (State::Error, Err(nb::Error::Other(Error::RadioError(radio_error)))),
           },
@@ -170,7 +174,18 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
     }
   }
 
-//  pub fn buffer()
-//  pub fn transmit()
-//  pub fn receive()
+  fn receiving_step_from_radio_state(&self) -> Receiving {
+    match self.radio.get_state() {
+      RadioState::Disabled  => Receiving::RequiresEnable,
+      RadioState::RxRumpUp  => Receiving::WaitingIdle,
+      RadioState::RxIdle    => Receiving::RequiresStart,
+      RadioState::Rx        => Receiving::WaitingPacket,
+      RadioState::RxDisable => Receiving::WaitingDisable,
+      _                     => Receiving::RequiresDisable,
+    }
+  }
+
+
+// TODO buffer operations: exchange/switch, take
+// TODO transmit operation
 }

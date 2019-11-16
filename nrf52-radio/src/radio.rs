@@ -36,21 +36,22 @@ pub type AsyncResult<T> = nb::Result<T, Error>;
 
 #[derive(Debug, Clone)]
 pub enum Error {
+  BufferNotDefined,
   WrongState,
 }
 
 pub trait RadioExt {
-  fn constrain<'a, LFOSC, LFSTAT>(self,
-                                  clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
-                                  buffer: &'a mut [u8]) -> Radio<'a, LFOSC, LFSTAT>;
+  fn constrain<LFOSC, LFSTAT>(self,
+                              clocks: &Clocks<ExternalOscillator, LFOSC, LFSTAT>
+                             ) -> Radio<LFOSC, LFSTAT>;
 }
 
 impl RadioExt for RADIO {
   fn constrain<'a, LFOSC, LFSTAT>(self,
                                   clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
-                                  buffer: &'a mut [u8]) -> Radio<'a, LFOSC, LFSTAT> {
+                                 ) -> Radio<'a, LFOSC, LFSTAT> {
 
-    Radio::new(self, clocks, buffer)
+    Radio::<'a, LFOSC, LFSTAT>::new(self, clocks)
   }
 }
 
@@ -64,22 +65,23 @@ impl RadioExt for RADIO {
 //  }
 //}
 
+pub struct Packet;
+
 pub struct Radio<'a, LFOSC, LFSTAT> {
   clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
   pub radio: RADIO,
-  buffer: &'a mut [u8],
+  buffer: Option<&'a mut [u8]>,
 }
 
 impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
 
   pub fn new(radio: RADIO,
-             clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
-             buffer: &'a mut [u8]) -> Self {
+             clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>) -> Self {
 
     Radio {
       radio,
       clocks,
-      buffer,
+      buffer: None,
     }
   }
 
@@ -263,17 +265,38 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
   }
 
   pub fn get_buffer(&self) -> &[u8] {
-    self.buffer
+    match self.buffer.as_ref() {
+      Some(buffer) => *buffer,
+      None => &[],
+    }
   }
 
   pub fn get_buffer_mut(&mut self) -> &mut [u8] {
-    self.buffer
+    match self.buffer.as_mut() {
+      Some(buffer) => *buffer,
+      None => &mut [],
+    }
   }
 
-  pub fn enable_rx(&self) -> Result<()> {
-    match self.get_state() {
-      State::Disabled => {
-        self.set_packet_ptr(self.buffer);
+  // TODO should we use a critical section ?
+  pub fn swap_buffer(&mut self, new_buffer: Option<&'a mut [u8]>) -> Option<&'a mut [u8]> {
+    match new_buffer.as_ref() {
+      Some(buffer) => self.set_packet_ptr(*buffer),
+      None => (),
+    }
+    let prev_buffer = self.buffer.take();
+    self.buffer = new_buffer;
+    prev_buffer
+  }
+
+  pub fn extract_packet(&mut self, new_buffer: Option<&'a mut [u8]>) -> Packet {
+    unimplemented!() // TODO implement extract_packet
+  }
+
+  pub fn enable_rx(&mut self) -> Result<()> {
+    match (self.buffer.as_ref(), self.get_state()) {
+      (Some(buffer), State::Disabled) => {
+        self.set_packet_ptr(*buffer);
 
         self.radio.events_ready.reset();
         self.radio.events_disabled.reset();
@@ -288,7 +311,8 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
 
         Ok(())
       },
-      _ => Err(Error::WrongState)
+      (Some(_), _) => Err(Error::WrongState),
+      (None, _)    => Err(Error::BufferNotDefined),
     }
   }
 
@@ -303,9 +327,9 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
   }
 
   pub fn start_rx(&self) -> Result<()> {
-    match self.get_state() {
-      State::RxIdle => {
-        self.set_packet_ptr(self.buffer);
+    match (self.buffer.as_ref(), self.get_state()) {
+      (Some(buffer), State::RxIdle) => {
+        self.set_packet_ptr(*buffer);
 
         self.radio.events_end.reset();
         self.radio.events_address.reset();
@@ -319,7 +343,8 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
 
         Ok(())
       },
-      _ => Err(Error::WrongState)
+      (Some(_), _) => Err(Error::WrongState),
+      (None, _)    => Err(Error::BufferNotDefined),
     }
   }
 
@@ -335,9 +360,15 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
     }
   }
 
-  pub fn stop(&self) {
-    // TODO clear events ???
-    self.radio.tasks_stop.write(|w| w.tasks_stop().set_bit());
+  pub fn stop(&self) -> Result<()> {
+    match self.get_state() {
+      State::Rx | State::Tx => {
+        // TODO clear events ???
+        self.radio.tasks_stop.write(|w| w.tasks_stop().set_bit());
+        Ok(())
+      },
+      _ => Err(Error::WrongState)
+    }
   }
 
   pub fn disable(&self) {
@@ -360,6 +391,8 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
   }
 
   pub fn free(self) -> RADIO {
+    // TODO disable, or fail if not disabled
+    // TODO reset PACKETPTR ?
     self.radio
   }
 }

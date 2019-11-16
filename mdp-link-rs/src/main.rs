@@ -7,7 +7,9 @@
 use cortex_m_rt::entry;
 
 #[allow(unused_imports)]
-use panic_halt;
+//use panic_halt;
+use panic_semihosting as _;
+
 use core::fmt::Write;
 use nb::block;
 
@@ -34,6 +36,7 @@ use nrf52_radio_esb::protocol::Protocol as EsbProtocol;
 use crate::nrf52840_mdk::Board;
 
 use cortex_m_semihosting::{dbg, hprintln, heprintln};
+use nrf52_radio::Radio;
 
 #[entry]
 fn main() -> ! {
@@ -46,9 +49,7 @@ fn main() -> ! {
 
     let clocks = board.CLOCK.constrain().enable_ext_hfosc();
 
-    let mut buffer = [0x00u8; 34];
-
-    let radio = board.RADIO.constrain(&clocks, &mut buffer);
+    let radio = Radio::new(board.RADIO, &clocks);
     radio
         .set_tx_power(TxPower::ZerodBm)
         .set_mode(Mode::Nrf2Mbit)
@@ -68,31 +69,35 @@ fn main() -> ! {
 
     board.leds.red.on();
 
+    let mut buffer1 = [0x00u8; 34];
+    let mut buffer2 = [0x00u8; 34];
+
+    drop(esb.radio.swap_buffer(Some(&mut buffer1)));
+
+    let mut next_buffer: Option<&mut [u8]> = Some(&mut buffer2);
+
     esb.start_receive().unwrap();
 
     loop {
         match esb.wait_receive() {
             Ok(()) => {
                 board.leds.blue.invert();
-                // TODO include crc check within wait_receive
-                if esb.radio.is_crc_ok() {
-                    // TODO switch buffer and start_receive
-                    board.leds.red.invert();
-                    let mut buf_iter = esb.radio.get_buffer().iter();
-                    let len = buf_iter.next().unwrap();
-                    let pid_nack = buf_iter.next().unwrap();
-                    drop(board.uart_daplink.write_fmt(format_args!("[{:02x} {} {}] ", len, pid_nack >> 1, pid_nack & 0x01)));
-                    for b in buf_iter {
-                        drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
-                    }
-                    drop(board.uart_daplink.write_char('\n'));
+                board.leds.red.invert();
+                next_buffer = esb.radio.swap_buffer(next_buffer.take());
+                let mut buf_iter = esb.radio.get_buffer().iter();
+                let len = buf_iter.next().unwrap();
+                let pid_noack = buf_iter.next().unwrap();
+                let pid = pid_noack >> 1;
+                let noack = pid_noack & 0x01;
+                drop(board.uart_daplink.write_fmt(format_args!("[{:02x} {} {}] ", len, pid, noack & 0x01)));
+                for b in buf_iter {
+                    drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
                 }
-                else {
+                drop(board.uart_daplink.write_char('\n'));
 //                    drop(board.uart_daplink.write_fmt(format_args!("rxmatch={:x} rxcrc={:x} ",
 //                        esb.radio.radio.rxmatch.read().bits(),
 //                        esb.radio.radio.rxcrc.read().bits(),
 //                    )));
-                }
                 esb.start_receive().unwrap();
             },
             Err(nb::Error::Other(esb_error)) => panic!("{:?}", esb_error),
