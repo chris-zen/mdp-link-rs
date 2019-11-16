@@ -5,7 +5,7 @@ pub mod protocol;
 use nrf52_radio::Radio;
 use nrf52_radio::{Result as RadioResult, AsyncResult as RadioAsyncResult};
 use nrf52_radio::Error as RadioError;
-use nrf52_radio::packet_config::{S1Length, S1IncludeInRam, Endianess, PacketConfig};
+use nrf52_radio::packet_config::{S1Length, S1IncludeInRam, PreambleLength, Endianess, PacketConfig};
 use nrf52_radio::states::State as RadioState;
 
 use nb;
@@ -67,10 +67,14 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
     let pcfn = match protocol {
       Protocol::FixedPayloadLength(length) =>
         PacketConfig::default()
-            .with_length_bits(0)
-            .with_s0_byte_included(true)
-            .with_s1_len(S1Length::Of1Bits)
+//            .with_length_bits(0)
+//            .with_s0_byte_included(true)
+            .with_length_bits(6)
+            .with_s0_byte_included(false)
+//            .with_s1_len(S1Length::Of1Bits)
+            .with_s1_len(S1Length::Of3Bits)
             .with_s1_include_in_ram(S1IncludeInRam::Automatic)
+            .with_preamble_len(PreambleLength::Of8Bits)
             .with_max_bytes(*length)
             .with_static_bytes(*length)
             .with_endianess(Endianess::BigEndian)
@@ -82,6 +86,7 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
             .with_s0_byte_included(false)
             .with_s1_len(S1Length::Of3Bits)
             .with_s1_include_in_ram(S1IncludeInRam::Automatic)
+            .with_preamble_len(PreambleLength::Of8Bits)
             .with_max_bytes(*max_length)
             .with_static_bytes(0)
             .with_endianess(Endianess::BigEndian)

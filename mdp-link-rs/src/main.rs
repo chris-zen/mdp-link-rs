@@ -78,7 +78,11 @@ fn main() -> ! {
                 if esb.radio.is_crc_ok() {
                     // TODO switch buffer and start_receive
                     board.leds.red.invert();
-                    for b in esb.radio.get_buffer().iter().skip(2) {
+                    let mut buf_iter = esb.radio.get_buffer().iter();
+                    let len = buf_iter.next().unwrap();
+                    let pid_nack = buf_iter.next().unwrap();
+                    drop(board.uart_daplink.write_fmt(format_args!("[{:02x} {} {}] ", len, pid_nack >> 1, pid_nack & 0x01)));
+                    for b in buf_iter {
                         drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
                     }
                     drop(board.uart_daplink.write_char('\n'));
