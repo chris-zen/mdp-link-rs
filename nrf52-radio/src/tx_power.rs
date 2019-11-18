@@ -1,26 +1,39 @@
-/*!
-
-Output power
-
-See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1.0.pdf): 6.20.14.11 TXPOWER
-
-*/
+///!
+///! Output power
+///!
+///! See [Product Specification](https://infocenter.nordicsemi.com/pdf/nRF52840_PS_v1.0.pdf): 6.20.14.11 TXPOWER
+///!
 
 pub enum TxPower {
-  Pos8dBm,   // +8 dBm
-  Pos7dBm,   // +7 dBm
-  Pos6dBm,   // +6 dBm
-  Pos5dBm,   // +5 dBm
-  Pos4dBm,   // +4 dBm
-  Pos3dBm,   // +3 dBm
-  Pos2dBm,   // +2 dBm
-  ZerodBm,   //  0 dBm
-  Neg4dBm,   // -4 dBm
-  Neg8dBm,   // -8 dBm
-  Neg12dBm,  // -12 dBm
-  Neg16dBm,  // -16 dBm
-  Neg20dBm,  // -20 dBm
-  Neg40dBm,  // -40 dBm
+  /// +8 dBm
+  Pos8dBm,
+  /// +7 dBm
+  Pos7dBm,
+  /// +6 dBm
+  Pos6dBm,
+  /// +5 dBm
+  Pos5dBm,
+  /// +4 dBm
+  Pos4dBm,
+  /// +3 dBm
+  Pos3dBm,
+  /// +2 dBm
+  Pos2dBm,
+  ///  0 dBm
+  ZerodBm,
+  /// -4 dBm
+  Neg4dBm,
+  /// -8 dBm
+  Neg8dBm,
+  /// -12 dBm
+  Neg12dBm,
+  /// -16 dBm
+  Neg16dBm,
+  /// -20 dBm
+  Neg20dBm,
+  /// -40 dBm
+  Neg40dBm,
+  /// Custom value
   Custom(u8)
 }
 

@@ -18,6 +18,7 @@ use crate::mode::Mode;
 use crate::packet_config::{S1IncludeInRam, Endianess, PacketConfig};
 use crate::frequency::Frequency;
 use crate::base_address::BaseAddresses;
+use crate::logical_address::LogicalAddress;
 use crate::states::State;
 use nrf52840_hal::Clocks;
 
@@ -209,6 +210,7 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
     self
   }
 
+  /// Radio channel frequency
   /// 6.20.14.10 FREQUENCY
   pub fn set_frequency(&self, freq: Frequency) -> &Self {
     self.radio.frequency.write(|w| unsafe {
@@ -222,11 +224,28 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
     self
   }
 
+  pub fn set_tx_address(&self, address: LogicalAddress) -> &Self {
+    self.radio.txaddress.write(|w| unsafe { w.bits(address.value())});
+    self
+  }
+
   /// 6.20.14.20 RXADDRESSES: Receive address select
   // TODO use a library for bit fields
   pub fn set_rx_addresses(&self, mask: u8) -> &Self {
     self.radio.rxaddresses.write(|w| unsafe { w.bits(mask.into()) });
     self
+  }
+
+  /// Logical address of which previous packet was received
+  /// 6.20.14.5 RXMATCH
+  pub fn get_received_address(&self) -> LogicalAddress {
+    LogicalAddress::from(u32::from(self.radio.rxmatch.read().rxmatch().bits())).unwrap()
+  }
+
+  /// CRC field of previously received packet
+  /// 6.20.14.6 RXCRC
+  pub fn get_received_crc(&self) -> u32 {
+    self.radio.rxcrc.read().bits()
   }
 
   pub fn get_state(&self) -> State {
@@ -245,7 +264,7 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
     self.radio.events_payload.read().events_payload().bit_is_set()
   }
 
-  pub fn is_packet_received(&self) -> bool {
+  pub fn is_end_or_disable(&self) -> bool {
     self.radio.events_end.read().events_end().bit_is_set() ||
         self.radio.events_disabled.read().events_disabled().bit_is_set()
   }
@@ -316,6 +335,29 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
     }
   }
 
+  pub fn enable_tx(&mut self) -> Result<()> {
+    match (self.buffer.as_ref(), self.get_state()) {
+      (Some(buffer), State::Disabled) => {
+        self.set_packet_ptr(*buffer);
+
+        self.radio.events_ready.reset();
+        self.radio.events_disabled.reset();
+        self.radio.events_end.reset();
+        self.radio.events_address.reset();
+        self.radio.events_payload.reset();
+
+        // "Preceding reads and writes cannot be moved past subsequent writes."
+        compiler_fence(Ordering::Release);
+
+        self.radio.tasks_txen.write(|w| w.tasks_txen().set_bit());
+
+        Ok(())
+      },
+      (Some(_), _) => Err(Error::WrongState),
+      (None, _)    => Err(Error::BufferNotDefined),
+    }
+  }
+
   pub fn wait_idle(&self) -> AsyncResult<()> {
     if self.is_ready() {
       self.radio.events_ready.reset();
@@ -326,9 +368,9 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
     }
   }
 
-  pub fn start_rx(&self) -> Result<()> {
+  pub fn start(&self) -> Result<()> {
     match (self.buffer.as_ref(), self.get_state()) {
-      (Some(buffer), State::RxIdle) => {
+      (Some(buffer), State::RxIdle) | (Some(buffer), State::TxIdle) => {
         self.set_packet_ptr(*buffer);
 
         self.radio.events_end.reset();
@@ -348,8 +390,8 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
     }
   }
 
-  pub fn wait_packet_received(&self) -> AsyncResult<()> {
-    if self.is_packet_received() {
+  pub fn wait_end_or_disable(&self) -> AsyncResult<()> {
+    if self.is_end_or_disable() {
       self.radio.events_end.reset();
       self.radio.events_address.reset();
       self.radio.events_payload.reset();
