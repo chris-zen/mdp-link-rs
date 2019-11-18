@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! values_as_enum {
   ( $enum_name:ident, $enum_doc:expr, $( ( $value:expr, $name:ident $(, $doc:expr)? ) ),* ) => {
-    #[derive(Clone, PartialEq)]
+    #[derive(Debug, Clone, PartialEq, Copy)]
     #[doc=$enum_doc]
     pub enum $enum_name {
       $(
@@ -11,7 +11,7 @@ macro_rules! values_as_enum {
     }
 
     impl $enum_name {
-      pub fn from(value: usize) -> Option<Self> {
+      pub fn from(value: u32) -> Option<Self> {
         match value {
           $(
             $value => Some($enum_name::$name),
@@ -21,7 +21,7 @@ macro_rules! values_as_enum {
         }
       }
 
-      pub fn value(&self) -> usize {
+      pub fn value(&self) -> u32 {
         match self {
           $(
             $enum_name::$name => $value,

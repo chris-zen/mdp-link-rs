@@ -11,6 +11,7 @@ pub mod mode;
 pub mod packet_config;
 pub mod base_address;
 pub mod frequency;
+pub mod logical_address;
 pub mod rx_addresses;
 pub mod states;
 pub mod radio;
