@@ -24,6 +24,8 @@ use hal::clocks::{ClocksExt, Clocks};
 mod nrf52840_mdk;
 use nrf52840_mdk::Leds;
 
+mod mdp;
+
 use nrf52_radio::radio::RadioExt;
 use nrf52_radio::tx_power::TxPower;
 use nrf52_radio::mode::Mode;
@@ -32,7 +34,7 @@ use nrf52_radio::logical_address::LogicalAddress;
 use nrf52_radio::rx_addresses::RX_ADDRESS_ALL;
 use nrf52_radio::base_address::BaseAddresses;
 
-use nrf52_radio_esb::Esb;
+use nrf52_radio_esb::{Esb, RxConfig, TxConfig};
 use nrf52_radio_esb::protocol::Protocol as EsbProtocol;
 use crate::nrf52840_mdk::Board;
 
@@ -41,7 +43,7 @@ use nrf52_radio::Radio;
 
 enum State {
     Sending,
-    Listening
+    Sniffing
 }
 
 #[entry]
@@ -69,91 +71,21 @@ fn main() -> ! {
     let mut buffer2 = [0x00u8; 34];
 
     // TODO EsbProtocol and buffers size must match
-    let mut esb = Esb::new(radio, EsbProtocol::fixed_payload_length(32), &mut buffer1, &mut buffer2);
+    let esb = Esb::new(radio, EsbProtocol::fixed_payload_length(32), &mut buffer1, &mut buffer2);
     esb.set_crc_16bits();
 
-//    hprintln!("pcfn0={:08x}", esb.radio.radio.pcnf0.read().bits()).unwrap();
-//    hprintln!("pcfn1={:08x}", esb.radio.radio.pcnf1.read().bits()).unwrap();
+    drop(board.uart_daplink.write_str("Starting ...\n"));
 
-//    drop(board.uart_daplink.write_str("Listening ...\n"));
-    drop(board.uart_daplink.write_str("Sending ...\n"));
+    let leds = &mut board.leds;
 
-    board.leds.red.on();
+//    red_led.on();
 
-    // M01 asks P905 to connect
-    let msg1: [u8; 34] = [33, 0,
-        0x09, 0x08, 0x62, 0x6d, 0xfa, 0x5d, 0x00, 0x01, 0x5a,
-        0x73, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00];
-
-    // P905 responds connection request to M01
-    let msg2: [u8; 34] = [33, 0,
-        0x09, 0x0d, 0x62, 0x6d, 0xfa, 0x5d, 0x00, 0x00, 0x3e,
-        0xc2, 0x3b, 0x00, 0x0f, 0x78, 0x6d, 0xf9, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0x00, 0x00, 0x00, 0x00];
-
-    let msg = &msg2;
-
-//    esb.get_buffer_mut().copy_from_slice(msg);
-
-//    esb.start_tx(LogicalAddress::Of0).unwrap();
-    esb.start_rx().unwrap();
-
-    let mut state = State::Listening;
-    let mut retries = 1;
+    let mut p905 = mdp::p905::Protocol::new(esb, &mut board.uart_daplink);
 
     loop {
-        match state {
-            State::Sending => {
-                match esb.wait_tx() {
-                    Ok(()) => {
-                        board.leds.blue.invert();
-                        board.leds.red.invert();
-
-                        retries -= 1;
-
-                        if retries == 0 {
-                            drop(board.uart_daplink.write_str("Done\n"));
-
-                            state = State::Listening;
-                            esb.start_rx().unwrap();
-                        }
-                        else {
-                            drop(board.uart_daplink.write_str("Retry\n"));
-                            esb.get_buffer_mut().copy_from_slice(msg);
-                            esb.start_tx(LogicalAddress::Of0).unwrap();
-                        }
-                    },
-                    Err(nb::Error::Other(esb_error)) => panic!("{:?}", esb_error),
-                    Err(nb::Error::WouldBlock) => {}
-                }
-            },
-            State::Listening => {
-                match esb.wait_rx() {
-                    Ok(()) => {
-                        board.leds.blue.invert();
-                        board.leds.red.invert();
-                        let buf_iter = esb.get_buffer().iter().skip(2);
-                        let packet = esb.get_last_received_packet().unwrap();
-                        let no_ack = if packet.no_ack { 1 } else { 0 };
-                        drop(board.uart_daplink.write_fmt(format_args!("[{} {:02x} {} {}] ",
-                                                                       packet.address.value(),
-                                                                       packet.length,
-                                                                       packet.pid,
-                                                                       no_ack)));
-                        for b in buf_iter {
-                            drop(board.uart_daplink.write_fmt(format_args!("{:02x} ", *b)));
-                        }
-                        drop(board.uart_daplink.write_char('\n'));
-                        esb.start_rx().unwrap();
-                    },
-                    Err(nb::Error::Other(esb_error)) => panic!("{:?}", esb_error),
-                    Err(nb::Error::WouldBlock) => {}
-                }
-            }
-        }
+//        p905.run();
+        p905.send_pairing_request(leds);
+//        p905.sniffer();
     }
 }
 

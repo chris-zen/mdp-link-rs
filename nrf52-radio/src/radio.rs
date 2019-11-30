@@ -9,7 +9,6 @@ use core::convert::TryFrom;
 use core::sync::atomic::{compiler_fence, Ordering};
 //use core::ops::Deref;
 //use cortex_m_semihosting::{dbg, hprintln, heprintln};
-use nb;
 
 use crate::hal::target::RADIO;
 use crate::hal::clocks::ExternalOscillator;
@@ -35,7 +34,7 @@ macro_rules! map_or {
 pub type Result<A> = core::result::Result<A, Error>;
 pub type AsyncResult<T> = nb::Result<T, Error>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum Error {
   BufferNotDefined,
   WrongState,
@@ -69,7 +68,7 @@ impl RadioExt for RADIO {
 pub struct Packet;
 
 pub struct Radio<'a, LFOSC, LFSTAT> {
-  clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
+  _clocks: &'a Clocks<ExternalOscillator, LFOSC, LFSTAT>,
   pub radio: RADIO,
   buffer: Option<&'a mut [u8]>,
 }
@@ -81,7 +80,7 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
 
     Radio {
       radio,
-      clocks,
+      _clocks: clocks,
       buffer: None,
     }
   }
@@ -283,6 +282,10 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
     self.radio.packetptr.write(|w| unsafe { w.bits(ptr) });
   }
 
+  fn reset_packet_ptr(&self) {
+    self.radio.packetptr.reset();
+  }
+
   pub fn get_buffer(&self) -> &[u8] {
     match self.buffer.as_ref() {
       Some(buffer) => *buffer,
@@ -300,16 +303,16 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
   // TODO should we use a critical section ?
   pub fn swap_buffer(&mut self, new_buffer: Option<&'a mut [u8]>) -> Option<&'a mut [u8]> {
     match new_buffer.as_ref() {
-      Some(buffer) => self.set_packet_ptr(*buffer),
-      None => (),
+      Some(buffer) =>
+        self.set_packet_ptr(*buffer),
+      None =>
+        // TODO this should only be allowed if the radio is disabled
+        // TODO decide whether to point to an undefined place or to leave the previous buffer
+        self.reset_packet_ptr(),
     }
     let prev_buffer = self.buffer.take();
     self.buffer = new_buffer;
     prev_buffer
-  }
-
-  pub fn extract_packet(&mut self, new_buffer: Option<&'a mut [u8]>) -> Packet {
-    unimplemented!() // TODO implement extract_packet
   }
 
   pub fn enable_rx(&mut self) -> Result<()> {
