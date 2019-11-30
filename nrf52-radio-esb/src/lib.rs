@@ -18,11 +18,79 @@ use crate::protocol::Protocol;
 pub type Result<A> = core::result::Result<A, Error>;
 pub type AsyncResult<A> = nb::Result<A, Error>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Copy)]
 pub enum Error {
+  /// Standby required before starting a rx/tx transaction
   StandbyRequired,
+
+  /// Rx buffer not ready to start a rx transaction
+  RxBufferBusy,
+
+  /// Tx buffer not ready to start a tx transaction
+  TxBufferBusy,
+
+  /// wait_rx called without a successful start_rx was called before
   ReceiveNotStarted,
+
+  /// Unexpected error from the radio
   RadioError(RadioError),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RxConfig {
+  skip_ack: bool,
+  retries: usize,
+}
+
+impl Default for RxConfig {
+  fn default() -> Self {
+    RxConfig {
+      skip_ack: false,
+      retries: 1,
+    }
+  }
+}
+
+impl RxConfig {
+  pub fn with_skip_ack(self, skip_ack: bool) -> Self {
+    RxConfig { skip_ack, .. self }
+  }
+
+  pub fn with_retries(self, retries: usize) -> Self {
+    RxConfig { retries, .. self }
+  }
+}
+
+
+#[derive(Debug, Clone, Copy)]
+pub struct TxConfig {
+  address: LogicalAddress,
+  skip_ack: bool,
+  retries: usize,
+}
+
+impl Default for TxConfig {
+  fn default() -> Self {
+    TxConfig {
+      address: LogicalAddress::Of0,
+      skip_ack: false,
+      retries: 1,
+    }
+  }
+}
+
+impl TxConfig {
+  pub fn new(address: LogicalAddress) -> Self {
+    TxConfig { address, .. TxConfig::default() }
+  }
+
+  pub fn with_skip_ack(self, skip_ack: bool) -> Self {
+    TxConfig { skip_ack, .. self }
+  }
+
+  pub fn with_retries(self, retries: usize) -> Self {
+    TxConfig { retries, .. self }
+  }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -34,18 +102,13 @@ pub struct RxPacket {
   pub crc: u32,
 }
 
-#[derive(Debug, Clone)]
-enum RxStep {
-  Disable,
-  WaitingDisable,
-  Enable,
-  WaitingIdle,
-  Start,
-  WaitingEnd,
+pub struct TxPacket {
+  address: LogicalAddress,
+  wait_ack: bool,
 }
 
 #[derive(Debug, Clone)]
-enum TxStep {
+enum Step {
   Disable,
   WaitingDisable,
   Enable,
@@ -59,13 +122,13 @@ enum State {
   /// Standby
   Standby,
   /// Receiving
-  Rx(RxStep),
-  /// Acknowledging the reception
-  RxAck(RxPacket, TxStep),
-  /// Sending
-  Tx(TxStep),
-  /// Waiting for an acknowledgement
-  TxAck(RxStep),
+  Rx(RxConfig, Step),
+  /// Transmitting an acknowledgement
+  TxAck(RxPacket, Step),
+  /// Transmitting
+  Tx(TxConfig, Step),
+  /// Receiving an acknowledgement
+  RxAck(TxConfig, Step),
   /// Disable radio
   Disable,
   /// Unexpected error
@@ -77,8 +140,10 @@ pub struct Esb<'a, LFOSC, LFSTAT> {
   protocol: Protocol,
   pub radio: Radio<'a, LFOSC, LFSTAT>,
   state: State,
-  next_buffer: Option<&'a mut [u8]>,
+  rx_buffer: Option<&'a mut [u8]>,
+  tx_buffer: Option<&'a mut [u8]>,
   rx_packet: Option<RxPacket>,
+  tx_packet: Option<TxPacket>,
 }
 
 impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
@@ -89,13 +154,15 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
 
     // TODO check Radio state, stop, disable
     Self::setup_protocol(&radio, &protocol);
-    drop(radio.swap_buffer(Some(write_buffer)));
+    drop(radio.swap_buffer(None));
     Esb {
       protocol,
       radio,
       state: State::Standby,
-      next_buffer: Some(read_buffer),
+      rx_buffer: Some(read_buffer),
+      tx_buffer: Some(write_buffer),
       rx_packet: None,
+      tx_packet: None,
     }
   }
 
@@ -149,15 +216,15 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
 
   // TODO expose the packet rather than the raw buffer ?
 
-  pub fn get_buffer(&self) -> &[u8] {
-    match self.next_buffer.as_ref() {
+  pub fn get_rx_buffer(&self) -> &[u8] {
+    match self.rx_buffer.as_ref() {
       Some(buffer) => *buffer,
       None => &[],
     }
   }
 
-  pub fn get_buffer_mut(&mut self) -> &mut [u8] {
-    match self.next_buffer.as_mut() {
+  pub fn get_tx_buffer(&mut self) -> &mut [u8] {
+    match self.tx_buffer.as_mut() {
       Some(buffer) => *buffer,
       None => &mut [],
     }
@@ -169,11 +236,17 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
 
   // TODO ack option as a parameter or as a different method ?
 
-  pub fn start_rx(&mut self) -> Result<()> {
+  pub fn start_rx(&mut self, rx_config: RxConfig) -> Result<()> {
     match self.state {
       State::Standby => {
-        self.state = State::Rx(self.rx_step_from_radio_state());
-        Ok(())
+        if self.rx_buffer.is_some() {
+          self.rx_packet = None;
+          self.state = State::Rx(rx_config, self.rx_step_from_radio_state());
+          Ok(())
+        }
+        else {
+          Err(Error::RxBufferBusy)
+        }
       },
       _ => Err(Error::StandbyRequired)
     }
@@ -181,33 +254,44 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
 
   pub fn wait_rx(&mut self) -> AsyncResult<()> {
     match self.state {
-      State::Rx(ref step) => {
+      State::Rx(config, ref step) => {
+        // TODO check timeout
+
         let (next_state, result) = match step {
-          RxStep::Disable => {
+          Step::Disable => {
             self.radio.disable();
-            self.next_state(State::Rx(RxStep::WaitingDisable))
+            self.next_state(State::Rx(config, Step::WaitingDisable))
           },
-          RxStep::WaitingDisable => match self.radio.wait_disabled() {
-            Ok(()) => self.next_state(State::Rx(RxStep::Enable)),
+          Step::WaitingDisable => match self.radio.wait_disabled() {
+            Ok(()) => self.next_state(State::Rx(config, Step::Enable)),
             Err(error) => self.handle_async_radio_error(error),
           },
-          RxStep::Enable => match self.radio.enable_rx() {
-            Ok(()) => self.next_state(State::Rx(RxStep::WaitingIdle)),
-            Err(error) => self.handle_radio_error(error),
+          Step::Enable => {
+            self.ensure_rx_buffer();
+            match self.radio.enable_rx() {
+              Ok(()) => self.next_state(State::Rx(config, Step::WaitingIdle)),
+              Err(error) => self.handle_radio_error(error),
+            }
           },
-          RxStep::WaitingIdle => match self.radio.wait_idle() {
-            Ok(()) => self.next_state(State::Rx(RxStep::Start)),
-            Err(error) => self.handle_async_radio_error(error),
+          Step::WaitingIdle => {
+            self.ensure_rx_buffer();
+            match self.radio.wait_idle() {
+              Ok(()) => self.next_state(State::Rx(config, Step::Start)),
+              Err(error) => self.handle_async_radio_error(error),
+            }
           },
-          RxStep::Start => match self.radio.start() {
-            Ok(()) => self.next_state(State::Rx(RxStep::WaitingEnd)),
-            Err(error) => self.handle_radio_error(error),
+          Step::Start => {
+            self.ensure_rx_buffer();
+            match self.radio.start() {
+              Ok(()) => self.next_state(State::Rx(config, Step::WaitingEnd)),
+              Err(error) => self.handle_radio_error(error),
+            }
           },
-          RxStep::WaitingEnd => match self.radio.wait_end_or_disable() {
+          Step::WaitingEnd => match self.radio.wait_end_or_disable() {
             Ok(()) => {
               if self.radio.is_crc_ok() {
-                self.next_buffer = self.radio.swap_buffer(self.next_buffer.take());
-                let mut rx_buffer = self.get_buffer().iter();
+                self.rx_buffer = self.radio.swap_buffer(self.tx_buffer.take());
+                let mut rx_buffer = self.get_rx_buffer().iter();
                 let length = *rx_buffer.next().unwrap();
                 let pid_noack = *rx_buffer.next().unwrap();
                 let pid = (pid_noack >> 1) & 0x03;
@@ -219,73 +303,62 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
                   address: self.radio.get_received_address(),
                   crc: self.radio.get_received_crc(),
                 };
-                if packet.no_ack {
+                if config.skip_ack || packet.no_ack {
                   self.rx_packet = Some(packet);
-                  self.radio.disable();
-                  self.next_state(State::Disable)
+                  self.tx_buffer = self.radio.swap_buffer(None);
+                  self.disable()
                 }
                 else {
-                  self.next_state(State::RxAck(packet, self.tx_step_from_radio_state()))
+                  self.next_state(State::TxAck(packet, self.tx_step_from_radio_state()))
                 }
               }
               else {
-                // TODO maximum number of CRC retries
-                self.next_state(State::Rx(self.rx_step_from_radio_state()))
+                self.next_state(State::Rx(config, self.rx_step_from_radio_state()))
               }
             },
             Err(error) => self.handle_async_radio_error(error),
-          },
-          _ => unimplemented!()
+          }
         };
         self.state = next_state;
         result
       },
-      State::RxAck(packet, ref step) => {
+      State::TxAck(packet, ref step) => {
         let (next_state, result) = match step {
-          TxStep::Disable => {
+          Step::Disable => {
             self.radio.disable();
-            self.next_state(State::RxAck(packet, TxStep::WaitingDisable))
+            self.next_state(State::TxAck(packet, Step::WaitingDisable))
           },
-          TxStep::WaitingDisable => match self.radio.wait_disabled() {
-            Ok(()) => self.next_state(State::RxAck(packet, TxStep::Enable)),
+          Step::WaitingDisable => match self.radio.wait_disabled() {
+            Ok(()) => self.next_state(State::TxAck(packet, Step::Enable)),
             Err(error) => self.handle_async_radio_error(error),
           },
-          TxStep::Enable => {
-            let ack_buffer = self.radio.get_buffer_mut();
-            ack_buffer[0] = 0;
-            ack_buffer[1] = packet.pid << 1;
-            self.radio.set_tx_address(packet.address);
+          Step::Enable => {
+            self.prepare_tx_ack(&packet);
             match self.radio.enable_tx() {
-              Ok(()) => self.next_state(State::RxAck(packet, TxStep::WaitingIdle)),
+              Ok(()) => self.next_state(State::TxAck(packet, Step::WaitingIdle)),
               Err(error) => self.handle_radio_error(error),
             }
           },
-          TxStep::WaitingIdle => match self.radio.wait_idle() {
-            Ok(()) => self.next_state(State::RxAck(packet, self.tx_step_from_radio_state())),
+          Step::WaitingIdle => match self.radio.wait_idle() {
+            Ok(()) => self.next_state(State::TxAck(packet, self.tx_step_from_radio_state())),
             Err(error) => self.handle_async_radio_error(error),
           },
-          TxStep::Start => match self.radio.start() {
-            Ok(()) => self.next_state(State::RxAck(packet, TxStep::WaitingEnd)),
+          Step::Start => match self.radio.start() {
+            Ok(()) => self.next_state(State::TxAck(packet, Step::WaitingEnd)),
             Err(error) => self.handle_radio_error(error),
           },
-          TxStep::WaitingEnd => match self.radio.wait_end_or_disable() {
+          Step::WaitingEnd => match self.radio.wait_end_or_disable() {
             Ok(()) => {
               self.rx_packet = Some(packet);
-              if self.radio.is_disabled() {
-                (State::Standby, Ok(()))
-              }
-              else {
-                self.radio.disable();
-                self.next_state(State::Disable)
-              }
+              self.tx_buffer = self.radio.swap_buffer(None);
+              self.disable()
             },
             Err(error) => self.handle_async_radio_error(error),
-          },
-          _ => unimplemented!()
+          }
         };
         self.state = next_state;
         result
-      }
+      },
       State::Disable => {
         let (next_state, result) = match self.radio.wait_disabled() {
           Ok(()) => (State::Standby, Ok(())),
@@ -298,13 +371,18 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
     }
   }
 
-  pub fn start_tx(&mut self, address: LogicalAddress) -> Result<()> {
+  pub fn start_tx(&mut self, tx_config: TxConfig) -> Result<()> {
     match self.state {
       State::Standby => {
-        self.radio.set_tx_address(address);
-        self.next_buffer = self.radio.swap_buffer(self.next_buffer.take());
-        self.state = State::Tx(self.tx_step_from_radio_state());
-        Ok(())
+        if self.tx_buffer.is_some() {
+          self.radio.set_tx_address(tx_config.address);
+          drop(self.radio.swap_buffer(self.tx_buffer.take()));
+          self.state = State::Tx(tx_config, self.tx_step_from_radio_state());
+          Ok(())
+        }
+        else {
+          Err(Error::TxBufferBusy)
+        }
       },
       _ => Err(Error::StandbyRequired)
     }
@@ -312,41 +390,81 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
 
   pub fn wait_tx(&mut self) -> AsyncResult<()> {
     match self.state {
-      State::Tx(ref step) => {
+      State::Tx(config, ref step) => {
         let (next_state, result) = match step {
-          TxStep::Disable => {
+          Step::Disable => {
             self.radio.disable();
-            self.next_state(State::Tx(TxStep::WaitingDisable))
+            self.next_state(State::Tx(config, Step::WaitingDisable))
           },
-          TxStep::WaitingDisable => match self.radio.wait_disabled() {
-            Ok(()) => self.next_state(State::Tx(TxStep::Enable)),
+          Step::WaitingDisable => match self.radio.wait_disabled() {
+            Ok(()) => self.next_state(State::Tx(config, Step::Enable)),
             Err(error) => self.handle_async_radio_error(error),
           },
-          TxStep::Enable => match self.radio.enable_tx() {
-            Ok(()) => self.next_state(State::Tx(TxStep::WaitingIdle)),
+          Step::Enable => match self.radio.enable_tx() {
+            Ok(()) => self.next_state(State::Tx(config, Step::WaitingIdle)),
             Err(error) => self.handle_radio_error(error),
           },
-          TxStep::WaitingIdle => match self.radio.wait_idle() {
-            Ok(()) => self.next_state(State::Tx(self.tx_step_from_radio_state())),
+          Step::WaitingIdle => match self.radio.wait_idle() {
+            Ok(()) => self.next_state(State::Tx(config, self.tx_step_from_radio_state())),
             Err(error) => self.handle_async_radio_error(error),
           },
-          TxStep::Start => match self.radio.start() {
-            Ok(()) => self.next_state(State::Tx(TxStep::WaitingEnd)),
+          Step::Start => match self.radio.start() {
+            Ok(()) => self.next_state(State::Tx(config, Step::WaitingEnd)),
             Err(error) => self.handle_radio_error(error),
           },
-          TxStep::WaitingEnd => match self.radio.wait_end_or_disable() {
+          Step::WaitingEnd => match self.radio.wait_end_or_disable() {
             Ok(()) => {
-              if self.radio.is_disabled() {
-                (State::Standby, Ok(()))
+              if config.skip_ack {
+                self.tx_buffer = self.radio.swap_buffer(None);
+                self.disable()
               }
               else {
-                self.radio.disable();
-                self.next_state(State::Disable)
+                self.tx_buffer = self.radio.swap_buffer(self.rx_buffer.take());
+                self.next_state(State::RxAck(config, self.rx_step_from_radio_state()))
+              }
+            },
+            Err(error) => self.handle_async_radio_error(error),
+          }
+        };
+        self.state = next_state;
+        result
+      },
+      State::RxAck(config, ref step) => {
+        // TODO check timeout
+        let (next_state, result) = match step {
+          Step::Disable => {
+            self.radio.disable();
+            self.next_state(State::RxAck(config, Step::WaitingDisable))
+          },
+          Step::WaitingDisable => match self.radio.wait_disabled() {
+            Ok(()) => self.next_state(State::RxAck(config, Step::Enable)),
+            Err(error) => self.handle_async_radio_error(error),
+          },
+          Step::Enable => match self.radio.enable_rx() {
+            Ok(()) => self.next_state(State::RxAck(config, Step::WaitingIdle)),
+            Err(error) => self.handle_radio_error(error),
+          },
+          Step::WaitingIdle => match self.radio.wait_idle() {
+            Ok(()) => self.next_state(State::RxAck(config, self.rx_step_from_radio_state())),
+            Err(error) => self.handle_async_radio_error(error),
+          },
+          Step::Start => match self.radio.start() {
+            Ok(()) => self.next_state(State::RxAck(config, Step::WaitingEnd)),
+            Err(error) => self.handle_radio_error(error),
+          },
+          Step::WaitingEnd => match self.radio.wait_end_or_disable() {
+            Ok(()) => {
+              if self.radio.is_crc_ok() {
+                // TODO check PID
+                self.rx_buffer = self.radio.swap_buffer(None);
+                self.disable()
+              }
+              else {
+                self.next_state(State::RxAck(config, self.rx_step_from_radio_state()))
               }
             },
             Err(error) => self.handle_async_radio_error(error),
           },
-          _ => unimplemented!()
         };
         self.state = next_state;
         result
@@ -378,25 +496,54 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
     }
   }
 
-  fn rx_step_from_radio_state(&self) -> RxStep {
-    match self.radio.get_state() {
-      RadioState::Disabled  => RxStep::Enable,
-      RadioState::RxRumpUp  => RxStep::WaitingIdle,
-      RadioState::RxIdle    => RxStep::Start,
-      RadioState::Rx        => RxStep::WaitingEnd,
-      RadioState::RxDisable => RxStep::WaitingDisable,
-      _                     => RxStep::Disable,
+  fn disable(&self) -> (State, AsyncResult<()>) {
+    if self.radio.is_disabled() {
+      (State::Standby, Ok(()))
+    }
+    else {
+      self.radio.disable();
+      self.next_state(State::Disable)
     }
   }
 
-  fn tx_step_from_radio_state(&self) -> TxStep {
-    match self.radio.get_state() {
-      RadioState::Disabled  => TxStep::Enable,
-      RadioState::TxRumpUp  => TxStep::WaitingIdle,
-      RadioState::TxIdle    => TxStep::Start,
-      RadioState::Tx        => TxStep::WaitingEnd,
-      RadioState::TxDisable => TxStep::WaitingDisable,
-      _                     => TxStep::Disable,
+  fn ensure_rx_buffer(&mut self) {
+    if self.rx_buffer.is_some() {
+      drop(self.radio.swap_buffer(self.rx_buffer.take()));
     }
+  }
+
+  fn set_tx_buffer(&mut self) {
+    if self.tx_buffer.is_some() {
+      drop(self.radio.swap_buffer(self.tx_buffer.take()));
+    }
+  }
+
+  fn rx_step_from_radio_state(&self) -> Step {
+    match self.radio.get_state() {
+      RadioState::Disabled  => Step::Enable,
+      RadioState::RxRumpUp  => Step::WaitingIdle,
+      RadioState::RxIdle    => Step::Start,
+      RadioState::Rx        => Step::WaitingEnd,
+      RadioState::RxDisable => Step::WaitingDisable,
+      _                     => Step::Disable,
+    }
+  }
+
+  fn tx_step_from_radio_state(&self) -> Step {
+    match self.radio.get_state() {
+      RadioState::Disabled  => Step::Enable,
+      RadioState::TxRumpUp  => Step::WaitingIdle,
+      RadioState::TxIdle    => Step::Start,
+      RadioState::Tx        => Step::WaitingEnd,
+      RadioState::TxDisable => Step::WaitingDisable,
+      _                     => Step::Disable,
+    }
+  }
+
+  fn prepare_tx_ack(&mut self, packet: &RxPacket) {
+    let ack_buffer = self.radio.get_buffer_mut();
+    ack_buffer[0] = 0;
+    ack_buffer[1] = packet.pid << 1;
+    self.radio.set_tx_address(packet.address);
   }
 }
