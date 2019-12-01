@@ -1,14 +1,10 @@
-#[feature(option_result_contains)]
-
 use core::fmt::Write;
-
-use nb::block;
 
 use crate::hal::target::UARTE0;
 
-use nrf52_radio_esb::{Esb, RxConfig, Error as EsbError, TxConfig};
+use nrf52_esb::{Esb, RxConfig, Error as EsbError, TxConfig};
 use nrf52840_hal::Uarte;
-use crate::nrf52840_mdk::{Led, Leds};
+//use nrf52840_mdk::{Led, Leds};
 
 // M01 asks P905 to connect
 const PAIRING_REQUEST: [u8; 34] = [33, 0,
@@ -62,7 +58,7 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
   pub fn run(&mut self) {
     let next_state = match self.state {
       State::Unpaired => {
-        self.uarte.write_fmt(format_args!("{:?}: Listening for pairing request ...\n", self.state));
+        drop(self.uarte.write_fmt(format_args!("{:?}: Listening for pairing request ...\n", self.state)));
         let rx_config = RxConfig::default();
         if let Err(err) = self.esb.start_rx(rx_config) {
           State::Error(Error::EsbError(err))
@@ -74,7 +70,7 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
       State::WaitPairingRequest => {
         match self.esb.wait_rx() {
           Ok(()) => {
-            self.uarte.write_fmt(format_args!("{:?}: Received pairing request ...\n", self.state));
+            drop(self.uarte.write_fmt(format_args!("{:?}: Received pairing request ...\n", self.state)));
             self.print_received_packet();
             let buf = &self.esb.get_rx_buffer()[2..];
             let code = (buf[0] as u16) << 8 | buf[1] as u16;
@@ -87,7 +83,7 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
         }
       },
       State::SendPairingResponse => {
-        self.uarte.write_fmt(format_args!("{:?}: Sending pairing response ...\n", self.state));
+        drop(self.uarte.write_fmt(format_args!("{:?}: Sending pairing response ...\n", self.state)));
         let buf = self.esb.get_tx_buffer();
         buf.copy_from_slice(&PAIRING_RESPONSE);
         let tx_config = TxConfig::default();
@@ -101,7 +97,7 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
       State::WaitPairingResponseSent => {
         match self.esb.wait_tx() {
           Ok(()) => {
-            self.uarte.write_fmt(format_args!("{:?}: Pairing response sent ...\n", self.state));
+            drop(self.uarte.write_fmt(format_args!("{:?}: Pairing response sent ...\n", self.state)));
             State::Paired
           },
           Err(error) => self.handle_esb_error(error),
@@ -109,7 +105,7 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
       },
       State::Paired => {
         if self.last_state.map(|s| s != State::WaitRequest).unwrap_or(true) {
-          self.uarte.write_fmt(format_args!("{:?}: Listening for requests ...\n", self.state));
+          drop(self.uarte.write_fmt(format_args!("{:?}: Listening for requests ...\n", self.state)));
         }
         let rx_config = RxConfig::default();
         if let Err(err) = self.esb.start_rx(rx_config) {
@@ -126,9 +122,9 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
             let code = (buf[0] as u16) << 8 | buf[1] as u16;
             match code {
               0x0908 => State::SendPairingResponse,
-              unknown => {
+              _ => {
                 self.print_received_packet();
-                self.uarte.write_str("Unknown request\n");
+                drop(self.uarte.write_str("Unknown request\n"));
                 State::Paired
               }
             }
@@ -142,10 +138,6 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
     self.state = next_state;
   }
 
-  fn state_changed(&self) -> bool {
-    self.last_state.map(|s| s != self.state).unwrap_or(true)
-  }
-
   fn handle_esb_error(&self, error: nb::Error<EsbError>) -> State {
     match error {
       nb::Error::WouldBlock => self.state,
@@ -153,12 +145,16 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
     }
   }
 
-  fn print_state(&mut self) {
-    if self.last_state.map(|s| s != self.state).unwrap_or(true) {
-      self.last_state = Some(self.state);
-      self.uarte.write_fmt(format_args!("state: {:?}\n", self.state));
-    }
-  }
+//  fn state_changed(&self) -> bool {
+//    self.last_state.map(|s| s != self.state).unwrap_or(true)
+//  }
+//
+//  fn print_state(&mut self) {
+//    if self.last_state.map(|s| s != self.state).unwrap_or(true) {
+//      self.last_state = Some(self.state);
+//      self.uarte.write_fmt(format_args!("state: {:?}\n", self.state));
+//    }
+//  }
 
   fn print_received_packet(&mut self) {
     let buf = &self.esb.get_rx_buffer()[2..];
@@ -173,67 +169,5 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
       drop(self.uarte.write_fmt(format_args!("{:02x} ", *b)));
     }
     drop(self.uarte.write_char('\n'));
-  }
-
-  // ---------------- DEBUG ---------------------------------------
-
-  pub fn sniffer(&mut self) {
-    let rx_config = RxConfig::default().with_skip_ack(true);
-    if let Err(err) = self.esb.start_rx(rx_config) {
-      self.uarte.write_fmt(format_args!("Error: {:?}\n", err));
-    }
-    else {
-      block!(self.esb.wait_rx());
-      self.print_received_packet();
-    }
-  }
-
-  pub fn receive_pairing_response(&mut self) {
-    self.uarte.write_str("Receiving pairing response ...\n");
-    let rx_config = RxConfig::default();
-    if let Err(err) = self.esb.start_rx(rx_config) {
-      self.uarte.write_fmt(format_args!("Error: {:?}\n", err));
-    }
-    else {
-      block!(self.esb.wait_rx());
-      self.uarte.write_str("Pairing response received\n");
-      self.print_received_packet();
-    }
-  }
-
-  pub fn send_pairing_response(&mut self, leds: &mut Leds) {
-    self.uarte.write_str("Sending pairing response ...\n");
-    let buf = self.esb.get_tx_buffer();
-    buf.copy_from_slice(&PAIRING_RESPONSE);
-    let tx_config = TxConfig::default().with_skip_ack(true);
-    leds.blue.on();
-    if let Err(err) = self.esb.start_tx(tx_config) {
-      self.uarte.write_fmt(format_args!("Error: {:?}\n", err));
-    }
-    else {
-      leds.red.on();
-      block!(self.esb.wait_tx());
-      leds.red.off();
-      leds.blue.off();
-      self.uarte.write_str("Pairing response sent\n");
-    }
-  }
-
-  pub fn send_pairing_request(&mut self, leds: &mut Leds) {
-    self.uarte.write_str("Sending pairing request ...\n");
-    let buf = self.esb.get_tx_buffer();
-    buf.copy_from_slice(&PAIRING_REQUEST);
-    let tx_config = TxConfig::default().with_skip_ack(false);
-    leds.blue.on();
-    if let Err(err) = self.esb.start_tx(tx_config) {
-      self.uarte.write_fmt(format_args!("Error: {:?}\n", err));
-    }
-    else {
-      leds.red.on();
-      block!(self.esb.wait_tx());
-      leds.red.off();
-      leds.blue.off();
-      self.uarte.write_str("Pairing response sent\n");
-    }
   }
 }
