@@ -11,18 +11,33 @@ use nrf52840_hal::Uarte;
 use crate::nrf52840_mdk::{Led, Leds};
 
 // M01 asks P905 to connect
-const PAIRING_REQUEST: [u8; 34] = [33, 0,
+const PAIRING_REQUEST: [u8; 34] = [51, 1,
   0x09, 0x08, 0x62, 0x6d, 0xfa, 0x5d, 0x00, 0x01,
   0x5a, 0x73, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
 // P905 responds the request from M01
-const PAIRING_RESPONSE: [u8; 34] = [51, 0,
+const PAIRING_RESPONSE: [u8; 34] = [51, 1,
   0x09, 0x0d, 0x62, 0x6d, 0xfa, 0x5d, 0x00, 0x00,
   0x3e, 0xc2, 0x3b, 0x00, 0x0f, 0x78, 0x6d, 0xf9,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
   0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+// M01 asks P905 for data
+const DATA_REQUEST: [u8; 34] = [51, 1,
+  0x07, 0x06, 0x62, 0x6d, 0xfa, 0x5d, 0x00, 0x01,
+  0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+// P905 answers with data
+const DATA_RESPONSE: [u8; 34] = [51, 1,
+  0x07, 0x1b, 0x00, 0x00, 0x02, 0x55, 0x00, 0x01,
+  0x21, 0x38, 0x00, 0x65, 0x00, 0x40, 0x04, 0x00,
+  0x30, 0x04, 0x00, 0x30, 0x03, 0x00, 0x30, 0x04,
+  0x00, 0x30, 0x00, 0x10, 0x00, 0xe9, 0x00, 0x00];
+
 
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum Error {
@@ -32,11 +47,14 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Copy)]
 pub enum State {
   Unpaired,
+  SendPairingRequest,
   WaitPairingRequest,
-  SendPairingResponse,
-  WaitPairingResponseSent,
-  Paired,
-  WaitRequest,
+  ReceivePairingResponse,
+  WaitPairingResponse,
+  SendDataRequest,
+  WaitDataRequest,
+  ReceiveDataResponse,
+  WaitDataResponse,
   Error(Error),
 }
 
@@ -62,9 +80,15 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
   pub fn run(&mut self) {
     let next_state = match self.state {
       State::Unpaired => {
-        self.uarte.write_fmt(format_args!("{:?}: Listening for pairing request ...\n", self.state));
-        let rx_config = RxConfig::default();
-        if let Err(err) = self.esb.start_rx(rx_config) {
+        self.uarte.write_fmt(format_args!("{:?}: Looking for P905 ...\n", self.state));
+        State::SendPairingRequest
+      },
+      State::SendPairingRequest => {
+        self.uarte.write_fmt(format_args!("{:?}: Sending pairing request ...\n", self.state));
+        let buf = self.esb.get_tx_buffer();
+        buf.copy_from_slice(&PAIRING_REQUEST);
+        let tx_config = TxConfig::default();
+        if let Err(err) = self.esb.start_tx(tx_config) {
           State::Error(Error::EsbError(err))
         }
         else {
@@ -72,64 +96,83 @@ impl<'a, LFOSC, LFSTAT> Protocol<'a, LFOSC, LFSTAT> {
         }
       },
       State::WaitPairingRequest => {
-        match self.esb.wait_rx() {
-          Ok(()) => {
-            self.uarte.write_fmt(format_args!("{:?}: Received pairing request ...\n", self.state));
-            self.print_received_packet();
-            let buf = &self.esb.get_rx_buffer()[2..];
-            let code = (buf[0] as u16) << 8 | buf[1] as u16;
-            match code {
-              0x0908 => State::SendPairingResponse,
-              _      => self.state,
-            }
-          },
-          Err(error) => self.handle_esb_error(error),
-        }
-      },
-      State::SendPairingResponse => {
-        self.uarte.write_fmt(format_args!("{:?}: Sending pairing response ...\n", self.state));
-        let buf = self.esb.get_tx_buffer();
-        buf.copy_from_slice(&PAIRING_RESPONSE);
-        let tx_config = TxConfig::default();
-        if let Err(err) = self.esb.start_tx(tx_config) {
-          State::Error(Error::EsbError(err))
-        }
-        else {
-          State::WaitPairingResponseSent
-        }
-      },
-      State::WaitPairingResponseSent => {
         match self.esb.wait_tx() {
           Ok(()) => {
-            self.uarte.write_fmt(format_args!("{:?}: Pairing response sent ...\n", self.state));
-            State::Paired
+            self.uarte.write_fmt(format_args!("{:?}: Pairing request sent ...\n", self.state));
+            State::ReceivePairingResponse
           },
           Err(error) => self.handle_esb_error(error),
         }
       },
-      State::Paired => {
-        if self.last_state.map(|s| s != State::WaitRequest).unwrap_or(true) {
-          self.uarte.write_fmt(format_args!("{:?}: Listening for requests ...\n", self.state));
-        }
+      State::ReceivePairingResponse => {
+        self.uarte.write_fmt(format_args!("{:?}: Listening for pairing response ...\n", self.state));
         let rx_config = RxConfig::default();
         if let Err(err) = self.esb.start_rx(rx_config) {
           State::Error(Error::EsbError(err))
         }
         else {
-          State::WaitRequest
+          State::WaitPairingResponse
         }
       },
-      State::WaitRequest => {
+      State::WaitPairingResponse => {
         match self.esb.wait_rx() {
           Ok(()) => {
             let buf = &self.esb.get_rx_buffer()[2..];
             let code = (buf[0] as u16) << 8 | buf[1] as u16;
             match code {
-              0x0908 => State::SendPairingResponse,
+              0x090d => State::SendDataRequest,
               unknown => {
                 self.print_received_packet();
                 self.uarte.write_str("Unknown request\n");
-                State::Paired
+                State::SendPairingRequest
+              }
+            }
+          },
+          Err(error) => self.handle_esb_error(error),
+        }
+      },
+      State::SendDataRequest => {
+        self.uarte.write_fmt(format_args!("{:?}: Sending data request ...\n", self.state));
+        let buf = self.esb.get_tx_buffer();
+        buf.copy_from_slice(&DATA_REQUEST);
+        let tx_config = TxConfig::default();
+        if let Err(err) = self.esb.start_tx(tx_config) {
+          State::Error(Error::EsbError(err))
+        }
+        else {
+          State::WaitDataRequest
+        }
+      },
+      State::WaitDataRequest => {
+        match self.esb.wait_tx() {
+          Ok(()) => {
+            self.uarte.write_fmt(format_args!("{:?}: Data request sent ...\n", self.state));
+            State::ReceiveDataResponse
+          },
+          Err(error) => self.handle_esb_error(error),
+        }
+      },
+      State::ReceiveDataResponse => {
+        self.uarte.write_fmt(format_args!("{:?}: Listening for data response ...\n", self.state));
+        let rx_config = RxConfig::default();
+        if let Err(err) = self.esb.start_rx(rx_config) {
+          State::Error(Error::EsbError(err))
+        }
+        else {
+          State::WaitDataResponse
+        }
+      },
+      State::WaitDataResponse => {
+        match self.esb.wait_rx() {
+          Ok(()) => {
+            let buf = &self.esb.get_rx_buffer()[2..];
+            let code = (buf[0] as u16) << 8 | buf[1] as u16;
+            match code {
+              0x071b => State::SendDataRequest,
+              unknown => {
+                self.print_received_packet();
+                self.uarte.write_str("Unknown request\n");
+                State::SendDataRequest
               }
             }
           },
