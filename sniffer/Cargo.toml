@@ -1,0 +1,28 @@
+[package]
+name = "sniffer"
+version = "0.1.0"
+authors = ["Christian Perez Llamas"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+cortex-m = "0.6.1"
+cortex-m-rt = "0.6.10"
+panic-halt = "0.2.0"
+nb = "0.1.2"
+
+embedded-hal = "0.2.3"
+nrf52840-hal = "0.8.1"
+
+nrf52840-mdk = { path = "../nrf52840-mdk" }
+nrf52-radio = { path = "../nrf52-radio" }
+nrf52-esb = { path = "../nrf52-esb" }
+
+# cortex-m-rtfm = "0.4.3"
+panic-semihosting = "0.5.3"
+cortex-m-semihosting = "0.3.5"
+
+[features]
+rt = ["nrf52840-hal/rt"]
+default = ["rt"]

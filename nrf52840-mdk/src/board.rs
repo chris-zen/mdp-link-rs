@@ -3,12 +3,10 @@
 //pub use embedded_hal;
 //use embedded_hal::digital::v2::OutputPin;
 
-/// Exports traits that are usually needed when using this crate
-pub mod prelude {
-  pub use nrf52840_hal::prelude::*;
-}
+use crate::led::{Led, Leds};
+use crate::button::Button;
 
-use nrf52840_hal::{
+use crate::hal::{
   prelude::*,
   gpio::{
     p0,
@@ -17,7 +15,6 @@ use nrf52840_hal::{
     Input,
     Output,
     PushPull,
-    PullUp,
     Level,
   },
   nrf52840_pac::{
@@ -38,7 +35,6 @@ use nrf52840_hal::{
     Baudrate as UartBaudrate,
   },
 };
-use embedded_hal::digital::StatefulOutputPin;
 
 
 /// The nRF52 pins that are available on the nRF52840DK
@@ -74,58 +70,6 @@ pub struct Pins {
 pub struct Flash {
   pub spim: Spim<nrf52::SPIM2>,
   pub cs: Pin<Output<PushPull>>,
-}
-
-/// The LEDs on the nRF52840-MDK board
-pub struct Leds {
-  /// nRF52840-MDK: LED red
-  pub red: Led,
-
-  /// nRF52840-MDK: LED green
-  pub green: Led,
-
-  /// nRF52840-MDK: LED blue
-  pub blue: Led,
-}
-
-/// An LED on the nRF52840-MDK board
-pub struct Led(Pin<Output<PushPull>>);
-
-impl Led {
-  fn new<Mode>(pin: Pin<Mode>) -> Self {
-    Led(pin.into_push_pull_output(Level::High))
-  }
-
-  /// Enable the LED
-  pub fn on(&mut self) {
-    #[allow(deprecated)]
-    self.0.set_low()
-  }
-
-  /// Disable the LED
-  pub fn off(&mut self) {
-    #[allow(deprecated)]
-    self.0.set_high()
-  }
-
-  /// Invert the LED
-  pub fn invert(&mut self) {
-    if self.0.is_set_low() {
-      self.off()
-    }
-    else {
-      self.on()
-    }
-  }
-}
-
-/// A Button on the nRF52840-MDK board
-pub struct Button(Pin<Input<PullUp>>);
-
-impl Button {
-  fn new<Mode>(pin: Pin<Mode>) -> Self {
-    Button(pin.into_pullup_input())
-  }
 }
 
 /// Provides access to all features of the nRF52840-MDK board

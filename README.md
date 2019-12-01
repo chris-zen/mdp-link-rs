@@ -1,10 +1,8 @@
-# mdp-link
-
 That's my attempt to write the firmware for the MDP-link with rust.
 
 See [mdp-link-sdk](https://github.com/chris-zen/mdp-link-sdk) and [mdp-link-mynewt](https://github.com/chris-zen/mdp-link-mynewt) for other explorations using C.
 
-## mdp-link-rs
+## mdp-link
 
 The [MDP-XP](http://www.miniware.com.cn/product/mdp-xp-digital-power-supply-set/) is a Digital Power supply composed of two modules, the M01 screen and the P905 power module.
 
@@ -14,7 +12,15 @@ The MDP modules use the `nrf24L01+` device for the 2.4GHz wireless communication
 
 For more information about the MDP you can have a look [here](https://www.eevblog.com/forum/testgear/miniware-mdp-xp-digital-power-supply-set/).
 
-I'm using an [nrf52840-mdk](https://wiki.makerdiary.com/nrf52840-mdk/) development kit, it includes a `nrf52840` microcontroller which has a radio that supports ESB.
+The code can be found [here](mdp-link).
+
+## mdp-protocols
+
+This is a library implementing the MDP communication protocols. [See here](mdp-protocols).
+
+## nrf52-esb
+
+The MDP devices use a proprietary protocol from Nordic Semiconductors called Enhanced Shock Burst (ESB). I am also working on a crate on top of the radio one to implement that protocol. [See here](nrf52-esb)
 
 ## nrf52-radio
 
@@ -22,6 +28,13 @@ As part of this project I am developing a HAL for the nrf52840's RADIO periphera
 
 It is still in progress and I am working on finding the right interface, while figuring out how to make it work for my purpose.
 
-## nrf52-esb
+## nrf52840-mdk
 
-The MDP devices use a proprietary protocol from Nordic Semiconductors called Enhanced Shock Burst (ESB). I am also working on a crate on top of the radio one to implement that protocol. [See here](nrf52-esb)
+I'm using an [nrf52840-mdk](https://wiki.makerdiary.com/nrf52840-mdk/) development kit, it includes a `nrf52840` microcontroller which has a radio that supports ESB.
+I also use the [USB dongle](https://wiki.makerdiary.com/nrf52840-mdk-usb-dongle/).
+
+The code can he found [here](nrf52840-mdk).
+
+## sniffer
+
+To debug the comminications I've written an small ESB sniffer. [See here](sniffer).

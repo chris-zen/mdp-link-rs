@@ -544,6 +544,9 @@ impl<'a, LFOSC, LFSTAT> Esb<'a, LFOSC, LFSTAT> {
     let ack_buffer = self.radio.get_buffer_mut();
     ack_buffer[0] = 0;
     ack_buffer[1] = packet.pid << 1;
+    for b in ack_buffer[2..].iter_mut() {
+      *b = 0;
+    }
     self.radio.set_tx_address(packet.address);
   }
 }

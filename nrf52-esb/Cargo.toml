@@ -1,5 +1,5 @@
 [package]
-name = "nrf52-radio-esb"
+name = "nrf52-esb"
 version = "0.1.0"
 authors = ["Christian Perez Llamas"]
 edition = "2018"
