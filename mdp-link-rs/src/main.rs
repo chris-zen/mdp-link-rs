@@ -80,12 +80,14 @@ fn main() -> ! {
 
 //    red_led.on();
 
-    let mut p905 = mdp::p905::Protocol::new(esb, &mut board.uart_daplink);
+//    let mut p905 = mdp::p905::Protocol::new(esb, &mut board.uart_daplink);
+    let mut m01 = mdp::m01::Protocol::new(esb, &mut board.uart_daplink);
 
     loop {
 //        p905.run();
-        p905.send_pairing_request(leds);
+//        p905.send_pairing_request(leds);
 //        p905.sniffer();
+        m01.run()
     }
 }
 
