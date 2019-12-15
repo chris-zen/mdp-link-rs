@@ -19,6 +19,7 @@ use crate::frequency::Frequency;
 use crate::base_address::BaseAddresses;
 use crate::logical_address::LogicalAddress;
 use crate::states::State;
+use crate::shortcuts::Shortcuts;
 use nrf52840_hal::Clocks;
 
 
@@ -83,6 +84,15 @@ impl<'a, LFOSC, LFSTAT> Radio<'a, LFOSC, LFSTAT> {
       _clocks: clocks,
       buffer: None,
     }
+  }
+
+  pub fn get_shortcuts(&self) -> Shortcuts {
+    Shortcuts::from_bits_truncate(self.radio.shorts.read().bits())
+  }
+
+  pub fn set_shortcuts(&self, shortcuts: Shortcuts) -> &Self {
+    self.radio.shorts.write(|w| unsafe { w.bits(shortcuts.bits()) });
+    self
   }
 
   pub fn enable_interrupts(&self, bits: u32) -> &Self {

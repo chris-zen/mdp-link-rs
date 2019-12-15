@@ -1,6 +1,8 @@
 #![no_std]
 
-use nb;
+#[macro_use]
+extern crate bitflags;
+
 use nrf52840_hal as hal;
 
 pub use radio::{AsyncResult, Error, Radio, RadioExt, Result};
@@ -13,6 +15,7 @@ pub mod base_address;
 pub mod frequency;
 pub mod logical_address;
 pub mod rx_addresses;
+pub mod shortcuts;
 pub mod states;
 pub mod radio;
 
