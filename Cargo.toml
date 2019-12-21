@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "mdp-link",
+  "mdp-link-p905",
   "mdp-protocols",
   "sniffer",
   "nrf52-esb",

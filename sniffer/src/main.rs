@@ -37,6 +37,8 @@ use nrf52_esb::{Esb, RxConfig, TxConfig, RxPacket};
 use nrf52_esb::protocol::Protocol as EsbProtocol;
 use nrf52840_mdk::{leds_welcome, Board};
 
+const LED_INTERVAL: u32 = 1_000_000;
+
 
 #[entry]
 fn main() -> ! {
@@ -72,6 +74,8 @@ fn main() -> ! {
     drop(board.uart_daplink.write_str("Starting ...\n"));
 
     board.leds.green.on();
+    board.leds.blue.off();
+    timer.start(LED_INTERVAL);
 
     loop {
         if let Err(error) = esb.start_rx(rx_config) {
@@ -82,19 +86,22 @@ fn main() -> ! {
         else {
             board.leds.green.on();
             board.leds.red.off();
-            board.leds.blue.on();
             if let Err(error) = block!(esb.wait_rx()) {
                 board.leds.green.off();
                 board.leds.red.on();
-                board.leds.blue.off();
                 drop(board.uart_daplink.write_fmt(format_args!("Error: {:?}\n", error)));
             }
             else {
+                board.leds.blue.invert();
                 let packet = esb.get_last_received_packet().unwrap();
                 let buf = esb.get_rx_buffer();
                 print_packet(&packet, buf, &mut board.uart_daplink);
-                board.leds.blue.off();
             }
+        }
+
+        if let Ok(()) = timer.wait() {
+            board.leds.blue.invert();
+            timer.start(LED_INTERVAL);
         }
     }
 }

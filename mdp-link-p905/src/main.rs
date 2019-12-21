@@ -28,7 +28,7 @@ use nrf52_radio::shortcuts::Shortcuts;
 
 use nrf52_esb::{Esb, protocol::Protocol as EsbProtocol};
 
-use mdp_protocols::m01;
+use mdp_protocols::p905;
 
 
 #[entry]
@@ -64,11 +64,11 @@ fn main() -> ! {
 
     let _leds = &mut board.leds;
 
-//    let mut p905 = p905::Protocol::new(esb, &mut board.uart_daplink);
-    let mut m01 = m01::Protocol::new(esb, &mut board.uart_daplink);
+    let mut p905 = p905::Protocol::new(esb, &mut board.uart_daplink);
+//    let mut m01 = m01::Protocol::new(esb, &mut board.uart_daplink);
 
     loop {
-//        p905.run();
-        m01.run()
+        p905.run();
+//        m01.run()
     }
 }
